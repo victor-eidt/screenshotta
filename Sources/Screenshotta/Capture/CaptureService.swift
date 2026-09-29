@@ -44,14 +44,15 @@ enum CaptureService {
         let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
         let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
 
-        // Display-local, top-left origin.
-        let local = CGRect(
+        // Display-local, top-left origin, snapped to whole device pixels: a fractional
+        // rect (mouse positions often are) makes ScreenCaptureKit resample and blur text.
+        let scale = CGFloat(filter.pointPixelScale)
+        let local = pixelAligned(CGRect(
             x: rect.minX - screen.frame.minX,
             y: screen.frame.maxY - rect.maxY,
             width: rect.width,
             height: rect.height
-        )
-        let scale = CGFloat(filter.pointPixelScale)
+        ), scale: scale)
         let config = SCStreamConfiguration()
         config.sourceRect = local
         config.width = max(1, Int((local.width * scale).rounded()))
@@ -61,6 +62,14 @@ enum CaptureService {
 
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         return CapturedImage(image: image, scale: scale)
+    }
+
+    private static func pixelAligned(_ rect: CGRect, scale: CGFloat) -> CGRect {
+        let minX = (rect.minX * scale).rounded() / scale
+        let minY = (rect.minY * scale).rounded() / scale
+        let maxX = (rect.maxX * scale).rounded() / scale
+        let maxY = (rect.maxY * scale).rounded() / scale
+        return CGRect(x: minX, y: minY, width: max(maxX - minX, 1 / scale), height: max(maxY - minY, 1 / scale))
     }
 
     // MARK: - Window

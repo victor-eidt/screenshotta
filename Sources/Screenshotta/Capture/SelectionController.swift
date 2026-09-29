@@ -207,10 +207,12 @@ final class OverlayView: NSView {
 
     private var selectionRect: NSRect? {
         guard let start = dragStart, let current = dragCurrent else { return nil }
-        return NSRect(
+        let rect = NSRect(
             x: min(start.x, current.x), y: min(start.y, current.y),
             width: abs(current.x - start.x), height: abs(current.y - start.y)
         )
+        // On the device pixel grid, so the border is crisp and matches the captured pixels.
+        return backingAlignedRect(rect, options: .alignAllEdgesNearest)
     }
 
     override func updateTrackingAreas() {
