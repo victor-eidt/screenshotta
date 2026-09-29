@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -12,6 +13,16 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         openEditors.append(controller)
         AppActivation.present(controller.window!)
         controller.positionTrafficLights()
+    }
+
+    /// Edits an image file in place. Does nothing if the file isn't a readable image.
+    static func open(fileURL url: URL) {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+        let dpi = properties?[kCGImagePropertyDPIWidth] as? Double ?? 72
+        open(CapturedImage(image: image, scale: max(1, dpi / 72)), fileURL: url)
     }
 
     private init(document: EditorDocument) {

@@ -31,6 +31,8 @@ final class Preferences: ObservableObject {
         static let bringWindowToFront = "bringWindowToFront"
         static let areaShortcut = "areaShortcut"
         static let windowShortcut = "windowShortcut"
+        static let shelfShortcut = "shelfShortcut"
+        static let shakeToOpenShelf = "shakeToOpenShelf"
     }
 
     static let defaultFolder = FileManager.default
@@ -52,6 +54,13 @@ final class Preferences: ObservableObject {
     @Published var windowShadow: Bool { didSet { defaults.set(windowShadow, forKey: Key.windowShadow) } }
     @Published var bringWindowToFront: Bool { didSet { defaults.set(bringWindowToFront, forKey: Key.bringWindowToFront) } }
 
+    @Published var shakeToOpenShelf: Bool {
+        didSet {
+            defaults.set(shakeToOpenShelf, forKey: Key.shakeToOpenShelf)
+            ShakeDetector.shared.isEnabled = shakeToOpenShelf
+        }
+    }
+
     @Published var areaShortcut: Shortcut? {
         didSet {
             storeShortcut(areaShortcut, forKey: Key.areaShortcut)
@@ -62,6 +71,13 @@ final class Preferences: ObservableObject {
     @Published var windowShortcut: Shortcut? {
         didSet {
             storeShortcut(windowShortcut, forKey: Key.windowShortcut)
+            HotKeyManager.shared.reloadCaptureShortcuts()
+        }
+    }
+
+    @Published var shelfShortcut: Shortcut? {
+        didSet {
+            storeShortcut(shelfShortcut, forKey: Key.shelfShortcut)
             HotKeyManager.shared.reloadCaptureShortcuts()
         }
     }
@@ -78,6 +94,7 @@ final class Preferences: ObservableObject {
             Key.windowCornerRadius: 12.0,
             Key.windowShadow: true,
             Key.bringWindowToFront: true,
+            Key.shakeToOpenShelf: true,
         ])
 
         saveToFolder = defaults.bool(forKey: Key.saveToFolder)
@@ -91,9 +108,11 @@ final class Preferences: ObservableObject {
         windowCornerRadius = defaults.double(forKey: Key.windowCornerRadius)
         windowShadow = defaults.bool(forKey: Key.windowShadow)
         bringWindowToFront = defaults.bool(forKey: Key.bringWindowToFront)
+        shakeToOpenShelf = defaults.bool(forKey: Key.shakeToOpenShelf)
         // Optionals are already initialized to nil, so a plain assignment here would run didSet.
         _areaShortcut = Published(initialValue: Self.loadShortcut(Key.areaShortcut, from: defaults, default: .defaultArea))
         _windowShortcut = Published(initialValue: Self.loadShortcut(Key.windowShortcut, from: defaults, default: .defaultWindow))
+        _shelfShortcut = Published(initialValue: Self.loadShortcut(Key.shelfShortcut, from: defaults, default: .defaultShelf))
     }
 
     /// A missing key means "never configured" (use the default); empty data means "cleared by the user".

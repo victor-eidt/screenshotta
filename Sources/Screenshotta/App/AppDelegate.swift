@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         BackgroundCursor.enable()
         setupStatusItem()
         HotKeyManager.shared.reloadCaptureShortcuts()
+        ShakeDetector.shared.isEnabled = Preferences.shared.shakeToOpenShelf
 
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
@@ -23,14 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Opening an image with Screenshotta (Dock drop, "Open With") edits it in place.
     func application(_ sender: NSApplication, open urls: [URL]) {
-        for url in urls {
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-            else { continue }
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-            let dpi = properties?[kCGImagePropertyDPIWidth] as? Double ?? 72
-            EditorWindowController.open(CapturedImage(image: image, scale: max(1, dpi / 72)), fileURL: url)
-        }
+        urls.forEach(EditorWindowController.open(fileURL:))
     }
 
     // MARK: - Menu bar
@@ -62,6 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(window)
 
         menu.addItem(.separator())
+        addShelfItems(to: menu)
+
+        menu.addItem(.separator())
         let folder = NSMenuItem(title: "Open Screenshots Folder", action: #selector(openFolder), keyEquivalent: "")
         folder.image = NSImage(systemSymbolName: "folder", accessibilityDescription: nil)
         menu.addItem(folder)
@@ -74,6 +71,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) {
             item.target = self
         }
+    }
+
+    private func addShelfItems(to menu: NSMenu) {
+        let newShelf = NSMenuItem(title: "New Shelf", action: #selector(openNewShelf), keyEquivalent: "")
+        newShelf.image = NSImage(systemSymbolName: "tray", accessibilityDescription: nil)
+        Preferences.shared.shelfShortcut?.apply(to: newShelf)
+        menu.addItem(newShelf)
+
+        let history = ShelfManager.shared.history
+        guard !history.isEmpty else { return }
+        menu.addItem(.sectionHeader(title: "Recent Shelves"))
+        for record in history.prefix(4) {
+            menu.addItem(shelfMenuItem(record))
+        }
+
+        let all = NSMenuItem(title: "All Shelves", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for record in history {
+            submenu.addItem(shelfMenuItem(record))
+        }
+        submenu.addItem(.separator())
+        let clear = NSMenuItem(title: "Clear History", action: #selector(clearShelfHistory), keyEquivalent: "")
+        clear.target = self
+        submenu.addItem(clear)
+        all.submenu = submenu
+        menu.addItem(all)
+    }
+
+    private func shelfMenuItem(_ record: ShelfRecord) -> NSMenuItem {
+        let item = NSMenuItem(title: record.title, action: #selector(reopenShelf(_:)), keyEquivalent: "")
+        item.representedObject = record.id
+        item.target = self
+        let date = Self.shelfDateFormatter.string(from: record.updatedAt)
+        if #available(macOS 14.4, *) {
+            item.subtitle = date
+        } else {
+            item.title = "\(record.title)  ·  \(date)"
+        }
+        item.image = record.urls.first.flatMap { MenuThumbnail.image(for: $0) }
+        return item
+    }
+
+    private static let shelfDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        formatter.doesRelativeDateFormatting = true
+        return formatter
+    }()
+
+    @objc private func openNewShelf() {
+        ShelfManager.shared.newShelf()
+    }
+
+    @objc private func reopenShelf(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID,
+              let record = ShelfManager.shared.history.first(where: { $0.id == id })
+        else { return }
+        ShelfManager.shared.reopen(record)
+    }
+
+    @objc private func clearShelfHistory() {
+        ShelfManager.shared.clearHistory()
     }
 
     @objc private func captureArea() {
@@ -92,6 +152,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openSettings() {
         SettingsWindowController.shared.show()
+    }
+}
+
+/// A small preview of a file for a menu item.
+enum MenuThumbnail {
+    static func image(for url: URL) -> NSImage? {
+        let box = NSSize(width: 26, height: 20)
+        let options = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 64,
+        ] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options)
+        else {
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            icon.size = NSSize(width: box.height, height: box.height)
+            return icon
+        }
+        let scale = min(box.width / CGFloat(cgImage.width), box.height / CGFloat(cgImage.height))
+        let size = NSSize(width: (CGFloat(cgImage.width) * scale).rounded(), height: (CGFloat(cgImage.height) * scale).rounded())
+        return NSImage(size: box, flipped: false) { rect in
+            let frame = NSRect(x: (rect.width - size.width) / 2, y: (rect.height - size.height) / 2, width: size.width, height: size.height)
+            NSBezierPath(roundedRect: frame, xRadius: 2.5, yRadius: 2.5).addClip()
+            NSImage(cgImage: cgImage, size: size).draw(in: frame)
+            return true
+        }
     }
 }
 

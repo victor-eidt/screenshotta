@@ -8,6 +8,7 @@ final class HotKeyManager: ObservableObject {
     enum Slot: UInt32 {
         case area = 1
         case window = 2
+        case shelf = 3
         case escape = 10
         case space = 11
     }
@@ -30,12 +31,14 @@ final class HotKeyManager: ObservableObject {
         let prefs = Preferences.shared
         register(.area, prefs.areaShortcut) { SelectionController.shared.begin(.area) }
         register(.window, prefs.windowShortcut) { SelectionController.shared.begin(.window) }
+        register(.shelf, prefs.shelfShortcut) { ShelfManager.shared.newShelf() }
     }
 
     /// Used while recording a new shortcut, so pressing the current one doesn't start a capture.
     func suspendCaptureShortcuts() {
         unregister(.area)
         unregister(.window)
+        unregister(.shelf)
     }
 
     func register(_ slot: Slot, _ shortcut: Shortcut?, action: @escaping () -> Void) {

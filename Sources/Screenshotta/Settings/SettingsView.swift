@@ -12,6 +12,7 @@ struct SettingsView: View {
                     row(.general)
                     row(.output)
                     row(.windowStyle)
+                    row(.shelf)
                 }
                 Section {
                     row(.shortcuts)
@@ -29,6 +30,7 @@ struct SettingsView: View {
                 case .general: GeneralPane()
                 case .output: OutputPane()
                 case .windowStyle: WindowStylePane()
+                case .shelf: ShelfPane()
                 case .shortcuts: ShortcutsPane()
                 case .permissions: PermissionsPane()
                 case .about: AboutPane()
@@ -152,7 +154,7 @@ private struct OutputPane: View {
             } header: {
                 Text("Floating Thumbnail")
             } footer: {
-                FooterText("Click the thumbnail to crop and annotate. Drag it into any app, or swipe it away.")
+                FooterText("Click the thumbnail to crop and annotate. Drag it into any app or onto a shelf, or swipe it away.")
             }
         }
         .formStyle(.grouped)
@@ -227,6 +229,49 @@ private struct SliderRow: View {
     }
 }
 
+// MARK: - Shelf
+
+private struct ShelfPane: View {
+    @ObservedObject private var prefs = Preferences.shared
+    @State private var historyCount = ShelfManager.shared.history.count
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Shake the pointer while dragging to open a shelf", isOn: $prefs.shakeToOpenShelf)
+                LabeledContent("New shelf") {
+                    Button("Open") { ShelfManager.shared.newShelf() }
+                }
+            } header: {
+                Text("Opening")
+            } footer: {
+                FooterText("A shelf holds files for a moment: drop screenshots or files on it, then drag them all, or just the selected ones, into a folder, a chat or a browser upload. The thumbnail after a capture has a tray button that adds it to the shelf.")
+            }
+
+            Section {
+                LabeledContent("Recent shelves") {
+                    HStack {
+                        Text("\(historyCount)")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                        Button("Clear History") {
+                            ShelfManager.shared.clearHistory()
+                            historyCount = ShelfManager.shared.history.count
+                        }
+                        .disabled(historyCount == 0)
+                    }
+                }
+            } header: {
+                Text("History")
+            } footer: {
+                FooterText("Reopen recent shelves from the menu bar. Shelves only point to your files; clearing the history never deletes them.")
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { historyCount = ShelfManager.shared.history.count }
+    }
+}
+
 // MARK: - Shortcuts
 
 private struct ShortcutsPane: View {
@@ -238,6 +283,7 @@ private struct ShortcutsPane: View {
             Section {
                 ShortcutRow(title: "Capture Area", shortcut: $prefs.areaShortcut, conflict: hotKeys.conflicts.contains(.area))
                 ShortcutRow(title: "Capture Window", shortcut: $prefs.windowShortcut, conflict: hotKeys.conflicts.contains(.window))
+                ShortcutRow(title: "New Shelf", shortcut: $prefs.shelfShortcut, conflict: hotKeys.conflicts.contains(.shelf))
             } header: {
                 Text("Screenshots")
             } footer: {

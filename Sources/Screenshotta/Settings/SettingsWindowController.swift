@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, output, windowStyle, shortcuts, permissions, about
+    case general, output, windowStyle, shelf, shortcuts, permissions, about
 
     var id: String { rawValue }
 
@@ -11,6 +11,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: "General"
         case .output: "After Capture"
         case .windowStyle: "Window Style"
+        case .shelf: "Shelf"
         case .shortcuts: "Shortcuts"
         case .permissions: "Permissions"
         case .about: "About"
@@ -22,6 +23,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: "gearshape.fill"
         case .output: "photo.on.rectangle.angled"
         case .windowStyle: "macwindow"
+        case .shelf: "tray.2.fill"
         case .shortcuts: "keyboard.fill"
         case .permissions: "lock.shield.fill"
         case .about: "info.circle.fill"
@@ -33,6 +35,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: .gray
         case .output: .blue
         case .windowStyle: .purple
+        case .shelf: .orange
         case .shortcuts: .red
         case .permissions: .green
         case .about: .indigo

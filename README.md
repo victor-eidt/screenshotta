@@ -7,6 +7,7 @@ A small macOS menu bar screenshot tool.
 - While selecting, **Space** switches between area and window mode and **Esc** cancels.
 - Every capture is copied to the clipboard and saved to `~/Pictures/Screenshots` (configurable).
 - A small thumbnail slides in at the bottom right: **click** to edit, **drag** into any app, or **swipe** it away.
+- **Shelf** (default `⌥⇧D`, or shake the pointer while dragging files): a small floating glass panel that holds files for a moment. Drop screenshots on it (or click the tray button on the thumbnail), then drag the whole stack into a folder, a chat or a browser upload. Click the stack to see every file: Shift- or ⌘-click to select several and drag only those; Delete removes from the shelf, ⌘C copies, double-click opens. Recent shelves come back from the menu bar.
 - The editor can crop, and draw arrows, lines, rectangles, circles and freehand. Copy (`⌘C`) or close the window to write the edits back to the file and the clipboard.
 
 ## Build & install
@@ -31,5 +32,6 @@ The icon lives in `Resources/AppIcon.icns`; regenerate it with `swift scripts/ma
 - `Sources/Screenshotta/Capture`: selection overlay, ScreenCaptureKit capture, window styling, output
 - `Sources/Screenshotta/Thumbnail`: the floating post-capture preview
 - `Sources/Screenshotta/Editor`: crop and annotation editor
+- `Sources/Screenshotta/Shelf`: floating shelves, their history and shake-to-open
 - `Sources/Screenshotta/Settings`: SwiftUI settings window
 - `Sources/Screenshotta/Hotkeys`: global shortcuts (Carbon hotkeys, no Accessibility needed)

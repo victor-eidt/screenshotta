@@ -31,6 +31,11 @@ final class ThumbnailController {
             EditorWindowController.open(capture, fileURL: fileURL)
         }
         panel.thumbnail.onDismiss = { [weak self] in self?.dismiss(animated: true) }
+        panel.thumbnail.onAddToShelf = { [weak self] in
+            guard let url = fileURL ?? CaptureOutput.temporaryFile(for: capture) else { return }
+            ShelfManager.shared.add([url])
+            self?.dismiss(animated: true)
+        }
         panel.thumbnail.onHover = { [weak self] hovering in
             if hovering { self?.hideTask?.cancel() } else { self?.scheduleHide() }
         }
@@ -97,6 +102,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
     var onOpen: (() -> Void)?
     var onDismiss: (() -> Void)?
     var onHover: ((Bool) -> Void)?
+    var onAddToShelf: (() -> Void)?
 
     private let capture: CapturedImage
     private let fileURL: URL?
@@ -104,6 +110,7 @@ final class ThumbnailView: NSView, NSDraggingSource {
     private var didDrag = false
     private var swipeDistance: CGFloat = 0
     private let closeButton = NSButton()
+    private let shelfButton = NSButton()
 
     init(frame: NSRect, capture: CapturedImage, fileURL: URL?) {
         self.capture = capture
@@ -129,6 +136,22 @@ final class ThumbnailView: NSView, NSDraggingSource {
         closeButton.action = #selector(close)
         closeButton.isHidden = true
         addSubview(closeButton)
+
+        shelfButton.bezelStyle = .regularSquare
+        shelfButton.isBordered = false
+        shelfButton.image = NSImage(systemSymbolName: "tray.and.arrow.down.fill", accessibilityDescription: "Add to Shelf")?
+            .withSymbolConfiguration(.init(pointSize: 9, weight: .bold))
+        shelfButton.contentTintColor = .white
+        shelfButton.wantsLayer = true
+        shelfButton.layer?.cornerRadius = 10
+        shelfButton.layer?.backgroundColor = NSColor(white: 0, alpha: 0.55).cgColor
+        shelfButton.frame = NSRect(x: frame.width - 25, y: frame.height - 25, width: 20, height: 20)
+        shelfButton.autoresizingMask = [.minXMargin, .minYMargin]
+        shelfButton.target = self
+        shelfButton.action = #selector(addToShelf)
+        shelfButton.toolTip = "Add to Shelf"
+        shelfButton.isHidden = true
+        addSubview(shelfButton)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -143,16 +166,22 @@ final class ThumbnailView: NSView, NSDraggingSource {
 
     override func mouseEntered(with event: NSEvent) {
         closeButton.isHidden = false
+        shelfButton.isHidden = false
         onHover?(true)
     }
 
     override func mouseExited(with event: NSEvent) {
         closeButton.isHidden = true
+        shelfButton.isHidden = true
         onHover?(false)
     }
 
     @objc private func close() {
         onDismiss?()
+    }
+
+    @objc private func addToShelf() {
+        onAddToShelf?()
     }
 
     override func mouseDown(with event: NSEvent) {
