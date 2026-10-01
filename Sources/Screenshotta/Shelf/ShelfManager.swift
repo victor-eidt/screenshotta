@@ -128,6 +128,7 @@ final class ShelfManager {
         do {
             try FileManager.default.createDirectory(at: historyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(history).write(to: historyURL, options: .atomic)
+            MenuThumbnail.prefetch(history.compactMap(\.urls.first))
         } catch {
             NSLog("Screenshotta: could not save shelf history: \(error)")
         }

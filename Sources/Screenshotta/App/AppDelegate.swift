@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         HotKeyManager.shared.reloadCaptureShortcuts()
         ShakeDetector.shared.isEnabled = Preferences.shared.shakeToOpenShelf
+        MenuThumbnail.prefetch(ShelfManager.shared.history.compactMap(\.urls.first))
 
         if !CGPreflightScreenCaptureAccess() {
             CGRequestScreenCaptureAccess()
@@ -199,7 +200,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             item.title = "\(record.title)  ·  \(date)"
         }
-        item.image = record.urls.first.flatMap { MenuThumbnail.image(for: $0) }
+        if let url = record.urls.first {
+            item.image = MenuThumbnail.image(for: url) { [weak item] image in item?.image = image }
+        }
         return item
     }
 
@@ -245,22 +248,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 }
 
-/// A small preview of a file for a menu item.
+/// A small preview of a file for a menu item. Decoding a full-size screenshot takes tens of milliseconds,
+/// which adds up to a menu that opens late, so previews are made in the background and kept. Until one
+/// is ready, the menu shows the file's icon and swaps in the preview when it arrives.
 enum MenuThumbnail {
-    static func image(for url: URL) -> NSImage? {
-        let box = NSSize(width: 26, height: 20)
+    private static let box = NSSize(width: 26, height: 20)
+    private static var cache: [String: NSImage] = [:]
+    private static var waiting: [String: [(NSImage) -> Void]] = [:]
+
+    static func image(for url: URL, whenReady update: @escaping (NSImage) -> Void) -> NSImage {
+        let key = cacheKey(url)
+        if let cached = cache[key] { return cached }
+        load(url, key: key, then: update)
+        return icon(for: url)
+    }
+
+    /// Makes previews ahead of time, so the menu opens with them in place.
+    static func prefetch(_ urls: [URL]) {
+        for url in urls {
+            let key = cacheKey(url)
+            if cache[key] == nil { load(url, key: key, then: nil) }
+        }
+    }
+
+    /// The modification date is part of the key, so an edited screenshot gets a new preview.
+    private static func cacheKey(_ url: URL) -> String {
+        let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        return "\(url.path)|\(modified?.timeIntervalSinceReferenceDate ?? 0)"
+    }
+
+    private static func load(_ url: URL, key: String, then update: ((NSImage) -> Void)?) {
+        let alreadyLoading = waiting[key] != nil
+        waiting[key, default: []].append(contentsOf: update.map { [$0] } ?? [])
+        guard !alreadyLoading else { return }
+        Task {
+            let cgImage = await decode(url)
+            let image = cgImage.map(framed) ?? icon(for: url)
+            cache[key] = image
+            waiting.removeValue(forKey: key)?.forEach { $0(image) }
+        }
+    }
+
+    @concurrent
+    private static func decode(_ url: URL) async -> CGImage? {
         let options = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: 64,
         ] as CFDictionary
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options)
-        else {
-            let icon = NSWorkspace.shared.icon(forFile: url.path)
-            icon.size = NSSize(width: box.height, height: box.height)
-            return icon
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options)
+    }
+
+    /// The file's icon in the same box as a preview, so swapping one for the other doesn't shift the menu.
+    private static func icon(for url: URL) -> NSImage {
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        return NSImage(size: box, flipped: false) { rect in
+            icon.draw(in: NSRect(x: (rect.width - rect.height) / 2, y: 0, width: rect.height, height: rect.height))
+            return true
         }
+    }
+
+    private static func framed(_ cgImage: CGImage) -> NSImage {
+        let box = box
         let scale = min(box.width / CGFloat(cgImage.width), box.height / CGFloat(cgImage.height))
         let size = NSSize(width: (CGFloat(cgImage.width) * scale).rounded(), height: (CGFloat(cgImage.height) * scale).rounded())
         return NSImage(size: box, flipped: false) { rect in
