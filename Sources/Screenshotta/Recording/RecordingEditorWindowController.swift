@@ -7,6 +7,17 @@ final class RecordingEditorWindowController: NSWindowController, NSWindowDelegat
 
     private let doc: RecordingDocument
 
+    /// Keeps an open editor's title in step with a rename in the Drafts window.
+    static func titleChanged(for project: RecordingProject, to title: String) {
+        guard let editor = openEditors.first(where: { $0.doc.project.folder == project.folder }) else { return }
+        editor.doc.titleChanged(to: title)
+        editor.window?.title = title
+    }
+
+    static func close(_ project: RecordingProject) {
+        openEditors.first { $0.doc.project.folder == project.folder }?.window?.close()
+    }
+
     static func open(_ project: RecordingProject) {
         if let existing = openEditors.first(where: { $0.doc.project.folder == project.folder }) {
             AppActivation.present(existing.window!)
@@ -49,6 +60,7 @@ final class RecordingEditorWindowController: NSWindowController, NSWindowDelegat
 
         let actions = RecordingEditorActions(
             delete: { [weak self] in self?.deleteRecording() },
+            showDrafts: { DraftsWindowController.shared.show() },
             showInFinder: { url in NSWorkspace.shared.activateFileViewerSelecting([url]) },
             addToShelf: { url in ShelfManager.shared.add([url]) }
         )
@@ -73,6 +85,7 @@ final class RecordingEditorWindowController: NSWindowController, NSWindowDelegat
             self.doc.close()
             try? FileManager.default.trashItem(at: self.doc.project.folder, resultingItemURL: nil)
             self.window?.close()
+            DraftsLibrary.shared.reload()
         }
     }
 
@@ -81,6 +94,7 @@ final class RecordingEditorWindowController: NSWindowController, NSWindowDelegat
     func windowWillClose(_ notification: Notification) {
         doc.close()
         Self.openEditors.removeAll { $0 === self }
+        DraftsLibrary.shared.reload()
         AppActivation.windowClosed()
     }
 

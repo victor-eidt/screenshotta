@@ -119,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func addRecentRecordings(to menu: NSMenu) {
         let recent = RecordingProject.recent(limit: 6)
         guard !recent.isEmpty else { return }
-        let item = NSMenuItem(title: "Recent Recordings", action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: "Drafts", action: nil, keyEquivalent: "")
         item.image = NSImage(systemSymbolName: "film.stack", accessibilityDescription: nil)
         let submenu = NSMenu()
         for (project, metadata) in recent {
@@ -135,9 +135,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             submenu.addItem(entry)
         }
         submenu.addItem(.separator())
-        let folder = NSMenuItem(title: "Show All in Finder", action: #selector(openRecordingsFolder), keyEquivalent: "")
-        folder.target = self
-        submenu.addItem(folder)
+        let all = NSMenuItem(title: "Show All Drafts…", action: #selector(openDrafts), keyEquivalent: "")
+        all.target = self
+        submenu.addItem(all)
         item.submenu = submenu
         menu.addItem(item)
     }
@@ -158,10 +158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         RecordingEditorWindowController.open(RecordingProject(folder: folder))
     }
 
-    @objc private func openRecordingsFolder() {
-        let folder = RecordingProject.libraryFolder
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        NSWorkspace.shared.open(folder)
+    @objc private func openDrafts() {
+        DraftsWindowController.shared.show()
     }
 
     private func addShelfItems(to menu: NSMenu) {

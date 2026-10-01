@@ -270,6 +270,7 @@ final class RecordingController: ObservableObject {
                 try session.project.save(cursor)
                 try session.project.save(RecordingEdits.initial(duration: result.duration, clicks: cursor.clicks, style: .lastUsed))
                 RecordingEditorWindowController.open(session.project)
+                DraftsLibrary.shared.reload()
             } catch {
                 _ = session.tracker.stop(start: 0, duration: 0)
                 try? FileManager.default.removeItem(at: session.project.folder)

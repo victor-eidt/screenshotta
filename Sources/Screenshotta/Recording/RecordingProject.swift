@@ -208,15 +208,34 @@ nonisolated struct RecordingProject: Sendable {
         return RecordingProject(folder: folder)
     }
 
-    /// Finished recordings, newest first.
-    static func recent(limit: Int = 8) -> [(project: RecordingProject, metadata: RecordingMetadata)] {
+    /// Finished recordings, most recently edited first.
+    static func recent(limit: Int = .max) -> [(project: RecordingProject, metadata: RecordingMetadata)] {
         let folders = (try? FileManager.default.contentsOfDirectory(at: libraryFolder, includingPropertiesForKeys: nil)) ?? []
         return folders
             .map(RecordingProject.init(folder:))
             .compactMap { project in project.loadMetadata().map { (project, $0) } }
-            .sorted { $0.metadata.createdAt > $1.metadata.createdAt }
+            .map { ($0.0, $0.1, $0.0.lastEdited(fallback: $0.1.createdAt)) }
+            .sorted { $0.2 > $1.2 }
             .prefix(limit)
-            .map { $0 }
+            .map { ($0.0, $0.1) }
+    }
+
+    /// When the edits were last saved, or `fallback` for a recording never edited.
+    func lastEdited(fallback: Date) -> Date {
+        let modified = (try? editsURL.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        return modified ?? fallback
+    }
+
+    /// A copy of the whole recording, edits included, under a new title.
+    func duplicate(title: String) throws -> RecordingProject {
+        let copy = try RecordingProject.create(named: title)
+        try FileManager.default.removeItem(at: copy.folder)
+        try FileManager.default.copyItem(at: folder, to: copy.folder)
+        if var metadata = copy.loadMetadata() {
+            metadata.title = title
+            try copy.save(metadata)
+        }
+        return copy
     }
 
     func loadMetadata() -> RecordingMetadata? { Self.read(metadataURL) }

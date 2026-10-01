@@ -3,6 +3,7 @@ import SwiftUI
 
 struct RecordingEditorActions {
     var delete: () -> Void
+    var showDrafts: () -> Void
     var showInFinder: (URL) -> Void
     var addToShelf: (URL) -> Void
 }
@@ -61,6 +62,7 @@ private struct RecordingTopBar: View {
     var body: some View {
         HStack(spacing: 6) {
             Color.clear.frame(width: 76, height: 1) // traffic lights
+            IconButton(symbol: "film.stack", help: "All drafts", action: actions.showDrafts)
             IconButton(symbol: "trash", help: "Delete recording", action: actions.delete)
             IconButton(symbol: "folder", help: "Show raw recording in Finder") { actions.showInFinder(doc.project.videoURL) }
 

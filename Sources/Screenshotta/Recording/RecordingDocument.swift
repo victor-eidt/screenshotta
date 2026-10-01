@@ -56,7 +56,7 @@ final class RecordingDocument: ObservableObject {
     }
 
     let project: RecordingProject
-    let metadata: RecordingMetadata
+    @Published private(set) var metadata: RecordingMetadata
     let cursor: CursorRecording
     let wallpaper: CGImage?
     let player = AVPlayer()
@@ -587,6 +587,11 @@ final class RecordingDocument: ObservableObject {
             counter += 1
         }
         return url
+    }
+
+    /// Called when the draft is renamed from the Drafts window.
+    func titleChanged(to title: String) {
+        metadata.title = title
     }
 
     // MARK: - Closing

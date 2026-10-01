@@ -105,6 +105,9 @@ private struct GeneralPane: View {
                 LabeledContent("Record Screen") {
                     Button("Start") { RecordingController.shared.toggle() }
                 }
+                LabeledContent("Drafts") {
+                    Button("Open") { DraftsWindowController.shared.show() }
+                }
                 Toggle("Count down before recording", isOn: $prefs.recordingCountdown)
             } header: {
                 Text("Screen Recording")

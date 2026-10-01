@@ -16,7 +16,7 @@ A small macOS menu bar screenshot tool.
   - **Zoom**: auto zoom eases in on clusters of clicks and follows the pointer, then eases back out. Click or drag on the zoom track to add your own; drag to move, drag the ends to resize.
   - **Clips**: drag the ends of a clip to trim, split at the playhead (`S`), delete a piece, and set each clip's speed (0.5× to 4×). Space plays, ← → step a frame, `⌘Z` undoes.
   - **Export** (`⌘E`): MP4 at 720p, 1080p, 1440p or 4K, saved to the screenshots folder (and copied as a file to the clipboard). The last style you used becomes the default for the next recording.
-  - Raw recordings and their edits live in `~/Library/Application Support/Screenshotta/Recordings`; reopen them from Recent Recordings in the menu bar.
+  - **Drafts**: every recording is a draft. Edits save as you go; the Drafts window (menu bar › Drafts › Show All Drafts…, Settings, or the stack button in the editor) lists them all to reopen, rename, duplicate or trash. They live in `~/Library/Application Support/Screenshotta/Recordings`.
 
 ## Build & install
 
