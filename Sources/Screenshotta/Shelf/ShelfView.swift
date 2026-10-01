@@ -7,7 +7,6 @@ enum ShelfLayout: String {
 struct ShelfView: View {
     @ObservedObject var shelf: Shelf
     @ObservedObject var controller: ShelfController
-    @State private var isTargeted = false
 
     var body: some View {
         ZStack {
@@ -23,14 +22,13 @@ struct ShelfView: View {
         .overlay {
             RoundedRectangle(cornerRadius: ShelfController.cornerRadius, style: .continuous)
                 .strokeBorder(Color.accentColor, lineWidth: 3)
-                .opacity(isTargeted ? 1 : 0)
+                .opacity(controller.isDropTargeted ? 1 : 0)
                 .allowsHitTesting(false)
         }
-        .onDrop(of: [.fileURL, .image], isTargeted: $isTargeted) { controller.accept($0) }
         .onChange(of: shelf.isEmpty) { _, isEmpty in
             if isEmpty { controller.setExpanded(false) }
         }
-        .animation(.snappy(duration: 0.2), value: isTargeted)
+        .animation(.snappy(duration: 0.2), value: controller.isDropTargeted)
         .animation(.snappy(duration: 0.25), value: shelf.items.map(\.id))
     }
 }
@@ -243,6 +241,7 @@ private struct GridTile: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
         }
         .padding(.horizontal, 6)

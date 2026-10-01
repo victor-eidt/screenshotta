@@ -1,15 +1,18 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// One floating shelf: a small glass panel that expands into a file browser.
 final class ShelfController: NSObject, ObservableObject {
     static let collapsedSize = NSSize(width: 184, height: 204)
     static let expandedSize = NSSize(width: 468, height: 348)
     static let cornerRadius: CGFloat = 28
+    /// Transparent room around the glass for its shadow. Without it the window edge clips the shadow
+    /// into a visible rectangle, which macOS then outlines when the panel becomes key.
+    private static let shadowMargin: CGFloat = 36
 
     let shelf: Shelf
     @Published private(set) var isExpanded = false
+    @Published private(set) var isDropTargeted = false
     private let panel: ShelfPanel
 
     init(shelf: Shelf) {
@@ -18,11 +21,32 @@ final class ShelfController: NSObject, ObservableObject {
         super.init()
         let hosting = NSHostingView(rootView: ShelfView(shelf: shelf, controller: self))
         hosting.sizingOptions = []
-        panel.contentView = GlassBackground.make(content: hosting, cornerRadius: Self.cornerRadius)
+        let glass = GlassBackground.make(content: hosting, cornerRadius: Self.cornerRadius)
+        let container = ShelfDropView(frame: NSRect(origin: .zero, size: Self.collapsedSize))
+        glass.frame = container.bounds.insetBy(dx: Self.shadowMargin, dy: Self.shadowMargin)
+        glass.autoresizingMask = [.width, .height]
+        container.addSubview(glass)
+        container.onTargetedChange = { [weak self] in self?.isDropTargeted = $0 }
+        container.onDrop = { [weak self] urls in self?.shelf.add(urls) }
+        container.landingRect = { [weak glass] in
+            // Where dropped files fly to: the middle of the stack.
+            guard let glass else { return .zero }
+            return NSRect(x: glass.frame.midX - 32, y: glass.frame.midY - 24, width: 64, height: 48)
+        }
+        panel.contentView = container
         panel.onKeyDown = { [weak self] event in self?.handleKey(event) ?? false }
     }
 
-    var frame: NSRect { panel.frame }
+    /// The glass, in screen coordinates.
+    var frame: NSRect { Self.glassFrame(panel.frame) }
+
+    private static func panelFrame(_ glass: NSRect) -> NSRect {
+        glass.insetBy(dx: -shadowMargin, dy: -shadowMargin)
+    }
+
+    private static func glassFrame(_ panel: NSRect) -> NSRect {
+        panel.insetBy(dx: shadowMargin, dy: shadowMargin)
+    }
 
     // MARK: - Window
 
@@ -38,7 +62,8 @@ final class ShelfController: NSObject, ObservableObject {
             let offset = CGFloat(cascadeIndex % 6) * 28
             origin = NSPoint(x: visible.maxX - size.width - 24 - offset, y: visible.midY - size.height / 2 - offset)
         }
-        panel.setFrame(Self.clamp(NSRect(origin: origin, size: size), to: visible), display: false)
+        let glass = Self.clamp(NSRect(origin: origin, size: size), to: visible)
+        panel.setFrame(Self.panelFrame(glass), display: false)
 
         panel.alphaValue = 0
         panel.orderFrontRegardless()
@@ -55,7 +80,7 @@ final class ShelfController: NSObject, ObservableObject {
     func setExpanded(_ expanded: Bool) {
         guard expanded != isExpanded else { return }
         let size = expanded ? Self.expandedSize : Self.collapsedSize
-        let current = panel.frame
+        let current = frame
         // The top-left corner stays put, unless the bigger panel would leave the screen.
         var target = NSRect(x: current.minX, y: current.maxY - size.height, width: size.width, height: size.height)
         if let visible = panel.screen?.visibleFrame {
@@ -68,9 +93,7 @@ final class ShelfController: NSObject, ObservableObject {
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.28
             context.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
-            panel.animator().setFrame(target, display: true)
-        } completionHandler: { [panel] in
-            panel.invalidateShadow()
+            panel.animator().setFrame(Self.panelFrame(target), display: true)
         }
     }
 
@@ -92,29 +115,6 @@ final class ShelfController: NSObject, ObservableObject {
         rect.origin.x = min(max(rect.minX, bounds.minX + 8), bounds.maxX - rect.width - 8)
         rect.origin.y = min(max(rect.minY, bounds.minY + 8), bounds.maxY - rect.height - 8)
         return rect
-    }
-
-    // MARK: - Dropping in
-
-    func accept(_ providers: [NSItemProvider]) -> Bool {
-        var accepted = false
-        for provider in providers {
-            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
-                accepted = true
-                _ = provider.loadObject(ofClass: URL.self) { [weak shelf] url, _ in
-                    guard let url else { return }
-                    Task { @MainActor in shelf?.add([url]) }
-                }
-            } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
-                accepted = true
-                let name = provider.suggestedName
-                provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { [weak shelf] url, _ in
-                    guard let url, let stored = ShelfManager.storeDroppedFile(url, suggestedName: name) else { return }
-                    Task { @MainActor in shelf?.add([stored]) }
-                }
-            }
-        }
-        return accepted
     }
 
     // MARK: - Actions
@@ -220,7 +220,8 @@ final class ShelfPanel: NSPanel {
         level = .floating
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = true
+        // The glass draws its own shadow (see ShelfController.shadowMargin).
+        hasShadow = false
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
         isMovableByWindowBackground = true

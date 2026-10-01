@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Handles clicks and drags on shelf files in AppKit: SwiftUI can't drag several files out at once.
 struct FileDragArea: NSViewRepresentable {
@@ -118,5 +119,88 @@ final class WindowDragView: NSView {
         if window.frame.origin == origin {
             onClick?()
         }
+    }
+}
+
+/// The shelf panel's root view and drop target. Reading the pasteboard synchronously (unlike SwiftUI's
+/// `onDrop`) lets the drop finish at once, and the dragged images fly into the stack instead of hovering.
+final class ShelfDropView: NSView {
+    var onTargetedChange: ((Bool) -> Void)?
+    var onDrop: (([URL]) -> Void)?
+    /// Where the dragged images land, in this view's coordinates.
+    var landingRect: (() -> NSRect)?
+
+    private static let imageTypes: [NSPasteboard.PasteboardType] = [.png, .tiff, NSPasteboard.PasteboardType(UTType.jpeg.identifier)]
+    private static let fileURLsOnly: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.fileURL] + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) } + Self.imageTypes)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func operation(for sender: NSDraggingInfo) -> NSDragOperation {
+        // Files dragged out of this same shelf would only land back where they came from.
+        if let source = sender.draggingSource as? NSView, source.window === window { return [] }
+        let pasteboard = sender.draggingPasteboard
+        let readable = pasteboard.canReadObject(forClasses: [NSURL.self], options: Self.fileURLsOnly)
+            || pasteboard.canReadObject(forClasses: [NSFilePromiseReceiver.self], options: nil)
+            || pasteboard.availableType(from: Self.imageTypes) != nil
+        return readable ? .copy : []
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let operation = operation(for: sender)
+        onTargetedChange?(operation != [])
+        return operation
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        operation(for: sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onTargetedChange?(false)
+    }
+
+    override func draggingEnded(_ sender: NSDraggingInfo) {
+        onTargetedChange?(false)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        sender.animatesToDestination = true
+        return true
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let pasteboard = sender.draggingPasteboard
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: Self.fileURLsOnly) as? [URL], !urls.isEmpty {
+            onDrop?(urls)
+        } else if let promises = pasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self], options: nil) as? [NSFilePromiseReceiver], !promises.isEmpty {
+            // Photos, Mail and some browsers hand over files that don't exist yet.
+            let folder = ShelfManager.droppedFilesFolder
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for promise in promises {
+                promise.receivePromisedFiles(atDestination: folder, options: [:], operationQueue: .main) { [weak self] url, error in
+                    guard error == nil else { return }
+                    MainActor.assumeIsolated { self?.onDrop?([url]) }
+                }
+            }
+        } else if let type = pasteboard.availableType(from: Self.imageTypes),
+                  let data = pasteboard.data(forType: type),
+                  let url = ShelfManager.storeDroppedImage(data) {
+            onDrop?([url])
+        } else {
+            return false
+        }
+
+        // Shrink every dragged image into the stack.
+        let target = landingRect?() ?? NSRect(x: bounds.midX, y: bounds.midY, width: 0, height: 0)
+        sender.enumerateDraggingItems(options: [], for: self, classes: [NSPasteboardItem.self], searchOptions: [:]) { item, index, _ in
+            let shift = CGFloat(min(index, 3)) * 3
+            item.draggingFrame = target.offsetBy(dx: shift, dy: -shift)
+        }
+        return true
     }
 }

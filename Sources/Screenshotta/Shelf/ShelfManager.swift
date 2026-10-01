@@ -11,11 +11,11 @@ final class ShelfManager {
 
     private let historyLimit = 20
 
-    private nonisolated static let supportFolder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    private static let supportFolder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Screenshotta", isDirectory: true)
     private let historyURL = ShelfManager.supportFolder.appendingPathComponent("Shelves.json")
     /// Where images dropped as raw data (not files) are written.
-    private nonisolated static let droppedFilesFolder = supportFolder.appendingPathComponent("Dropped Files", isDirectory: true)
+    static let droppedFilesFolder = supportFolder.appendingPathComponent("Dropped Files", isDirectory: true)
 
     private init() {
         loadHistory()
@@ -135,24 +135,19 @@ final class ShelfManager {
 
     // MARK: - Dropped data
 
-    /// Keeps a copy of image data that arrived without a file (for example, an image dragged out of a browser).
-    /// Runs on the drop's loading queue: the temporary file is gone once its callback returns.
-    nonisolated static func storeDroppedFile(_ temporaryURL: URL, suggestedName: String?) -> URL? {
+    /// Keeps image data that arrived without a file (for example, an image dragged out of a browser).
+    static func storeDroppedImage(_ data: Data) -> URL? {
+        guard let image = NSBitmapImageRep(data: data),
+              let png = image.representation(using: .png, properties: [:])
+        else { return nil }
         let fm = FileManager.default
         try? fm.createDirectory(at: droppedFilesFolder, withIntermediateDirectories: true)
-        let ext = temporaryURL.pathExtension.isEmpty ? "png" : temporaryURL.pathExtension
-        let base = (suggestedName?.isEmpty == false ? suggestedName! : "Image")
-        var url = droppedFilesFolder.appendingPathComponent(base).appendingPathExtension(ext)
+        var url = droppedFilesFolder.appendingPathComponent("Image").appendingPathExtension("png")
         var counter = 2
         while fm.fileExists(atPath: url.path) {
-            url = droppedFilesFolder.appendingPathComponent("\(base) \(counter)").appendingPathExtension(ext)
+            url = droppedFilesFolder.appendingPathComponent("Image \(counter)").appendingPathExtension("png")
             counter += 1
         }
-        do {
-            try fm.copyItem(at: temporaryURL, to: url)
-            return url
-        } catch {
-            return nil
-        }
+        return (try? png.write(to: url)) != nil ? url : nil
     }
 }

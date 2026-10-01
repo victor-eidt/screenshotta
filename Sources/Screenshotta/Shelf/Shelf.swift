@@ -10,6 +10,8 @@ final class ShelfItem: ObservableObject, Identifiable {
     let byteCount: Int64?
     @Published private(set) var thumbnail: NSImage?
     @Published private(set) var pixelSize: CGSize?
+    /// Finishes once the thumbnail and pixel size are known.
+    private(set) var previewLoading: Task<Void, Never>?
 
     init(url: URL) {
         self.url = url
@@ -34,7 +36,7 @@ final class ShelfItem: ObservableObject, Identifiable {
 
     private func loadImagePreview() {
         let url = url
-        Task {
+        previewLoading = Task {
             let preview = await Self.imagePreview(url)
             pixelSize = preview.pixelSize
             thumbnail = preview.image.map { NSImage(cgImage: $0, size: .zero) }
@@ -53,7 +55,7 @@ final class ShelfItem: ObservableObject, Identifiable {
         let options = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 480,
+            kCGImageSourceThumbnailMaxPixelSize: 360,
         ] as CFDictionary
         return (CGImageSourceCreateThumbnailAtIndex(source, 0, options), pixelSize)
     }
@@ -65,6 +67,8 @@ final class Shelf: ObservableObject, Identifiable {
     let createdAt: Date
     @Published private(set) var items: [ShelfItem] = []
     @Published var selection: Set<ShelfItem.ID> = []
+    /// Files being added whose previews are still loading.
+    private var pending: Set<URL> = []
 
     /// Called after every change to the list of files, so the history stays current.
     var onChange: (() -> Void)?
@@ -86,11 +90,21 @@ final class Shelf: ObservableObject, Identifiable {
 
     var selectedItems: [ShelfItem] { items.filter { selection.contains($0.id) } }
 
+    /// New files show up once their previews are ready, so they never flash as empty placeholders.
     func add(_ urls: [URL]) {
-        let fresh = Self.unique(urls, excluding: Set(items.map(\.url.standardizedFileURL)))
+        let fresh = Self.unique(urls, excluding: Set(items.map(\.url.standardizedFileURL)).union(pending))
         guard !fresh.isEmpty else { return }
-        items.append(contentsOf: fresh.map(ShelfItem.init))
-        onChange?()
+        let keys = fresh.map(\.standardizedFileURL)
+        pending.formUnion(keys)
+        let newItems = fresh.map(ShelfItem.init)
+        Task {
+            for item in newItems {
+                await item.previewLoading?.value
+            }
+            pending.subtract(keys)
+            items.append(contentsOf: newItems)
+            onChange?()
+        }
     }
 
     func remove(_ ids: Set<ShelfItem.ID>) {
