@@ -19,7 +19,14 @@ final class SelectionController {
         case window
     }
 
+    /// A screenshot, or what to record.
+    enum Purpose {
+        case screenshot
+        case recording
+    }
+
     private(set) var mode: Mode = .area
+    private(set) var purpose: Purpose = .screenshot
     private(set) var candidates: [WindowCandidate] = []
     private var panels: [OverlayPanel] = []
     private var isCapturing = false
@@ -32,8 +39,12 @@ final class SelectionController {
 
     var isActive: Bool { !panels.isEmpty }
 
-    func begin(_ mode: Mode) {
+    func begin(_ mode: Mode, purpose: Purpose = .screenshot) {
         if isActive {
+            if self.purpose != purpose {
+                self.purpose = purpose
+                redrawAll()
+            }
             if self.mode != mode { toggleMode() }
             return
         }
@@ -45,6 +56,7 @@ final class SelectionController {
         }
 
         self.mode = mode
+        self.purpose = purpose
         candidates = Self.onScreenWindows()
         ThumbnailController.shared.dismiss(animated: false)
 
@@ -94,6 +106,10 @@ final class SelectionController {
 
     func finishArea(_ rect: CGRect, on screen: NSScreen) {
         tearDown()
+        if purpose == .recording {
+            RecordingController.shared.start(.area(rect, screen))
+            return
+        }
         isCapturing = true
         Task {
             defer { isCapturing = false }
@@ -109,12 +125,17 @@ final class SelectionController {
     func finishWindow(_ candidate: WindowCandidate) {
         let isFrontmost = candidates.first { $0.pid == candidate.pid } == candidate
             && NSWorkspace.shared.frontmostApplication?.processIdentifier == candidate.pid
+        let purpose = purpose
         tearDown()
         isCapturing = true
         Task {
             defer { isCapturing = false }
             if Preferences.shared.bringWindowToFront, !isFrontmost {
                 await WindowActivator.bringToFront(candidate)
+            }
+            if purpose == .recording {
+                RecordingController.shared.start(.window(candidate))
+                return
             }
             do {
                 let capture = try await CaptureService.captureStyledWindow(candidate.id)
@@ -124,6 +145,12 @@ final class SelectionController {
                 CaptureOutput.presentError(error)
             }
         }
+    }
+
+    /// Recording only: a click without a drag records the whole screen.
+    func finishDisplay(_ screen: NSScreen) {
+        tearDown()
+        RecordingController.shared.start(.display(screen))
     }
 
     private func tearDown() {
@@ -260,7 +287,10 @@ final class OverlayView: NSView {
         guard let controller, controller.mode == .area, let rect = selectionRect else { return }
         resetDrag()
         needsDisplay = true
-        guard rect.width >= 2, rect.height >= 2 else { return }
+        guard rect.width >= 2, rect.height >= 2 else {
+            if controller.purpose == .recording { controller.finishDisplay(targetScreen) }
+            return
+        }
         let global = rect.offsetBy(dx: targetScreen.frame.minX, dy: targetScreen.frame.minY)
         controller.finishArea(global, on: targetScreen)
     }
@@ -283,9 +313,32 @@ final class OverlayView: NSView {
             }
         case .window:
             if let hovered = controller.hovered {
-                drawHighlight(hovered.frame.offsetBy(dx: -targetScreen.frame.minX, dy: -targetScreen.frame.minY))
+                drawHighlight(hovered.frame.offsetBy(dx: -targetScreen.frame.minX, dy: -targetScreen.frame.minY), recording: controller.purpose == .recording)
             }
         }
+        if controller.purpose == .recording, dragStart == nil {
+            drawRecordingHint(controller.mode)
+        }
+    }
+
+    private func drawRecordingHint(_ mode: SelectionController.Mode) {
+        let text = switch mode {
+        case .area: "Drag to record an area  ·  Click to record the whole screen  ·  Space for a window  ·  Esc to cancel"
+        case .window: "Click a window to record it  ·  Space for an area  ·  Esc to cancel"
+        }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ]
+        let string = NSAttributedString(string: text, attributes: attributes)
+        let size = string.size()
+        let pill = NSRect(x: (bounds.width - size.width) / 2 - 18, y: bounds.height - size.height - 64, width: size.width + 36, height: size.height + 16)
+        NSColor(white: 0.08, alpha: 0.8).setFill()
+        NSBezierPath(roundedRect: pill, xRadius: pill.height / 2, yRadius: pill.height / 2).fill()
+        let dot = NSRect(x: pill.minX + 13, y: pill.midY - 3.5, width: 7, height: 7)
+        NSColor.systemRed.setFill()
+        NSBezierPath(ovalIn: dot).fill()
+        string.draw(at: NSPoint(x: pill.minX + 26, y: pill.minY + 8))
     }
 
     private func drawSelection(_ rect: NSRect) {
@@ -306,12 +359,13 @@ final class OverlayView: NSView {
         }
     }
 
-    private func drawHighlight(_ rect: NSRect) {
+    private func drawHighlight(_ rect: NSRect, recording: Bool) {
+        let tint: NSColor = recording ? .systemRed : .systemBlue
         let path = NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12)
-        NSColor.systemBlue.withAlphaComponent(0.22).setFill()
+        tint.withAlphaComponent(0.22).setFill()
         path.fill()
         path.lineWidth = 2
-        NSColor.systemBlue.withAlphaComponent(0.55).setStroke()
+        tint.withAlphaComponent(0.55).setStroke()
         path.stroke()
     }
 

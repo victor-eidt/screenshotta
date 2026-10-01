@@ -32,6 +32,8 @@ final class Preferences: ObservableObject {
         static let areaShortcut = "areaShortcut"
         static let windowShortcut = "windowShortcut"
         static let shelfShortcut = "shelfShortcut"
+        static let recordShortcut = "recordShortcut"
+        static let recordingCountdown = "recordingCountdown"
         static let shakeToOpenShelf = "shakeToOpenShelf"
     }
 
@@ -53,6 +55,7 @@ final class Preferences: ObservableObject {
     @Published var windowCornerRadius: Double { didSet { defaults.set(windowCornerRadius, forKey: Key.windowCornerRadius) } }
     @Published var windowShadow: Bool { didSet { defaults.set(windowShadow, forKey: Key.windowShadow) } }
     @Published var bringWindowToFront: Bool { didSet { defaults.set(bringWindowToFront, forKey: Key.bringWindowToFront) } }
+    @Published var recordingCountdown: Bool { didSet { defaults.set(recordingCountdown, forKey: Key.recordingCountdown) } }
 
     @Published var shakeToOpenShelf: Bool {
         didSet {
@@ -82,6 +85,13 @@ final class Preferences: ObservableObject {
         }
     }
 
+    @Published var recordShortcut: Shortcut? {
+        didSet {
+            storeShortcut(recordShortcut, forKey: Key.recordShortcut)
+            HotKeyManager.shared.reloadCaptureShortcuts()
+        }
+    }
+
     private init() {
         defaults.register(defaults: [
             Key.saveToFolder: true,
@@ -95,6 +105,7 @@ final class Preferences: ObservableObject {
             Key.windowShadow: true,
             Key.bringWindowToFront: true,
             Key.shakeToOpenShelf: true,
+            Key.recordingCountdown: true,
         ])
 
         saveToFolder = defaults.bool(forKey: Key.saveToFolder)
@@ -109,10 +120,12 @@ final class Preferences: ObservableObject {
         windowShadow = defaults.bool(forKey: Key.windowShadow)
         bringWindowToFront = defaults.bool(forKey: Key.bringWindowToFront)
         shakeToOpenShelf = defaults.bool(forKey: Key.shakeToOpenShelf)
+        recordingCountdown = defaults.bool(forKey: Key.recordingCountdown)
         // Optionals are already initialized to nil, so a plain assignment here would run didSet.
         _areaShortcut = Published(initialValue: Self.loadShortcut(Key.areaShortcut, from: defaults, default: .defaultArea))
         _windowShortcut = Published(initialValue: Self.loadShortcut(Key.windowShortcut, from: defaults, default: .defaultWindow))
         _shelfShortcut = Published(initialValue: Self.loadShortcut(Key.shelfShortcut, from: defaults, default: .defaultShelf))
+        _recordShortcut = Published(initialValue: Self.loadShortcut(Key.recordShortcut, from: defaults, default: .defaultRecord))
     }
 
     /// A missing key means "never configured" (use the default); empty data means "cleared by the user".

@@ -9,6 +9,7 @@ final class HotKeyManager: ObservableObject {
         case area = 1
         case window = 2
         case shelf = 3
+        case record = 4
         case escape = 10
         case space = 11
     }
@@ -32,6 +33,7 @@ final class HotKeyManager: ObservableObject {
         register(.area, prefs.areaShortcut) { SelectionController.shared.begin(.area) }
         register(.window, prefs.windowShortcut) { SelectionController.shared.begin(.window) }
         register(.shelf, prefs.shelfShortcut) { ShelfManager.shared.newShelf() }
+        register(.record, prefs.recordShortcut) { RecordingController.shared.toggle() }
     }
 
     /// Used while recording a new shortcut, so pressing the current one doesn't start a capture.
@@ -39,6 +41,7 @@ final class HotKeyManager: ObservableObject {
         unregister(.area)
         unregister(.window)
         unregister(.shelf)
+        unregister(.record)
     }
 
     func register(_ slot: Slot, _ shortcut: Shortcut?, action: @escaping () -> Void) {

@@ -67,7 +67,7 @@ enum CaptureOutput {
         return try? save(capture, in: folder)
     }
 
-    private static func timestamp() -> String {
+    static func timestamp() -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"

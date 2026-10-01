@@ -47,6 +47,6 @@
         </dict>
     </array>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Screenshotta needs Screen Recording access to take screenshots.</string>
+    <string>Screenshotta needs Screen Recording access to take screenshots and record your screen.</string>
 </dict>
 </plist>

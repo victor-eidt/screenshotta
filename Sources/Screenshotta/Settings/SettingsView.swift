@@ -100,6 +100,17 @@ private struct GeneralPane: View {
             } footer: {
                 FooterText("Screenshotta lives in the menu bar. Use the shortcuts, or the camera icon in the menu bar.")
             }
+
+            Section {
+                LabeledContent("Record Screen") {
+                    Button("Start") { RecordingController.shared.toggle() }
+                }
+                Toggle("Count down before recording", isOn: $prefs.recordingCountdown)
+            } header: {
+                Text("Screen Recording")
+            } footer: {
+                FooterText("Drag an area, click to record the whole screen, or press Space and pick a window. Click the timer in the menu bar (or press the shortcut again) to stop. The recording then opens in the editor: background, smooth cursor, auto zoom on clicks, trimming and speed.")
+            }
         }
         .formStyle(.grouped)
     }
@@ -283,6 +294,7 @@ private struct ShortcutsPane: View {
             Section {
                 ShortcutRow(title: "Capture Area", shortcut: $prefs.areaShortcut, conflict: hotKeys.conflicts.contains(.area))
                 ShortcutRow(title: "Capture Window", shortcut: $prefs.windowShortcut, conflict: hotKeys.conflicts.contains(.window))
+                ShortcutRow(title: "Record Screen", shortcut: $prefs.recordShortcut, conflict: hotKeys.conflicts.contains(.record))
                 ShortcutRow(title: "New Shelf", shortcut: $prefs.shelfShortcut, conflict: hotKeys.conflicts.contains(.shelf))
             } header: {
                 Text("Screenshots")
@@ -343,7 +355,7 @@ private struct PermissionsPane: View {
             Section {
                 PermissionRow(
                     title: "Screen Recording",
-                    detail: "Required to take screenshots.",
+                    detail: "Required to take screenshots and record the screen.",
                     symbol: "rectangle.dashed.badge.record",
                     tint: .red,
                     granted: screenRecording,

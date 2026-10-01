@@ -120,23 +120,27 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) { positionTrafficLights() }
     func windowDidExitFullScreen(_ notification: Notification) { positionTrafficLights() }
 
-    /// Vertically centers the traffic lights in our taller top bar.
     func positionTrafficLights() {
-        guard let window,
-              let close = window.standardWindowButton(.closeButton),
+        window?.centerTrafficLights(inBarOfHeight: EditorView.barHeight)
+    }
+}
+
+extension NSWindow {
+    /// Vertically centers the traffic lights in a top bar taller than the standard title bar.
+    func centerTrafficLights(inBarOfHeight height: CGFloat) {
+        guard let close = standardWindowButton(.closeButton),
               let titlebarView = close.superview,
               let container = titlebarView.superview,
-              !window.styleMask.contains(.fullScreen)
+              !styleMask.contains(.fullScreen)
         else { return }
-        let height = EditorView.barHeight
         var frame = container.frame
         frame.size.height = height
-        frame.origin.y = window.frame.height - height
+        frame.origin.y = self.frame.height - height
         container.frame = frame
         titlebarView.frame = container.bounds
 
         for type in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            guard let button = window.standardWindowButton(type) else { continue }
+            guard let button = standardWindowButton(type) else { continue }
             button.setFrameOrigin(NSPoint(x: button.frame.minX, y: ((height - button.frame.height) / 2).rounded()))
         }
     }

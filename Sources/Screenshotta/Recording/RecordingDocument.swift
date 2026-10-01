@@ -1,0 +1,532 @@
+import AppKit
+import AVFoundation
+import Combine
+
+enum RecordingInspectorTab: String, CaseIterable, Identifiable {
+    case background, cursor, zoom, clip
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .background: "Background"
+        case .cursor: "Cursor"
+        case .zoom: "Zoom"
+        case .clip: "Clip"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .background: "photo"
+        case .cursor: "cursorarrow"
+        case .zoom: "plus.magnifyingglass"
+        case .clip: "film"
+        }
+    }
+}
+
+enum ExportSize: Int, CaseIterable, Identifiable {
+    case hd = 1280, fullHD = 1920, quadHD = 2560, ultraHD = 3840
+
+    var id: Int { rawValue }
+
+    var title: String {
+        switch self {
+        case .hd: "720p"
+        case .fullHD: "1080p"
+        case .quadHD: "1440p"
+        case .ultraHD: "4K"
+        }
+    }
+}
+
+enum ExportState: Equatable {
+    case idle
+    case exporting(Double)
+    case done(URL)
+    case failed(String)
+}
+
+/// One recording open in the editor: its edits with undo, and the player that previews them.
+final class RecordingDocument: ObservableObject {
+    enum Selection: Equatable {
+        case segment(UUID)
+        case zoom(UUID)
+    }
+
+    let project: RecordingProject
+    let metadata: RecordingMetadata
+    let cursor: CursorRecording
+    let wallpaper: CGImage?
+    let player = AVPlayer()
+
+    @Published private(set) var edits: RecordingEdits
+    @Published var selection: Selection?
+    @Published var inspector: RecordingInspectorTab = .background
+    @Published private(set) var currentTime: Double = 0
+    @Published private(set) var isPlaying = false
+    @Published var timelineZoom: Double = 1
+    @Published var exportSize: ExportSize = .fullHD
+    @Published private(set) var export: ExportState = .idle
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
+
+    private(set) var timeline: ClipTimeline
+    private let sourceTrack: AVAssetTrack
+    private let trackDuration: Double
+    private let sourceSize: CGSize
+    private let renderer: RecordingRenderer
+    private var composition: AVMutableComposition?
+    private var customBackground: (path: String, image: CGImage?)?
+    private var motionKey: String?
+    private var motion = MotionTrack.empty
+
+    private var undoStack: [RecordingEdits] = []
+    private var redoStack: [RecordingEdits] = []
+    private(set) var isInteracting = false
+    private var refreshGeneration = 0
+    private var pendingSeek: Double?
+    private var isSeeking = false
+    private var saveTask: Task<Void, Never>?
+    private var observers: [Any] = []
+    private var statusObservation: NSKeyValueObservation?
+
+    /// Preview frames are rendered at most this wide (or tall); export renders at full size.
+    private static let previewLongSide: CGFloat = 1920
+
+    static func load(_ project: RecordingProject) async throws -> RecordingDocument {
+        guard let metadata = project.loadMetadata() else { throw CocoaError(.fileReadCorruptFile) }
+        let asset = AVURLAsset(url: project.videoURL)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw RecordingCompositionError.noVideo }
+        let size = try await track.load(.naturalSize)
+        let duration = try await asset.load(.duration).seconds
+        let cursor = project.loadCursor()
+        let edits = project.loadEdits() ?? .initial(duration: duration, clicks: cursor.clicks, style: .lastUsed)
+        let wallpaper = CGImageSourceCreateWithURL(project.wallpaperURL as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+        return RecordingDocument(
+            project: project, metadata: metadata, cursor: cursor, edits: edits, track: track,
+            trackDuration: duration, sourceSize: size, wallpaper: wallpaper
+        )
+    }
+
+    private init(
+        project: RecordingProject, metadata: RecordingMetadata, cursor: CursorRecording, edits: RecordingEdits,
+        track: AVAssetTrack, trackDuration: Double, sourceSize: CGSize, wallpaper: CGImage?
+    ) {
+        self.project = project
+        self.metadata = metadata
+        self.cursor = cursor
+        self.edits = edits
+        self.wallpaper = wallpaper
+        sourceTrack = track
+        self.trackDuration = trackDuration
+        self.sourceSize = sourceSize
+        timeline = ClipTimeline(edits.segments)
+        renderer = RecordingRenderer(scene: RenderScene(
+            style: edits.style, motion: .empty, timeline: timeline, pointSize: metadata.pointSize,
+            sourceSize: sourceSize, wallpaper: wallpaper, customBackground: nil
+        ))
+        player.actionAtItemEnd = .pause
+        observePlayer()
+        refresh(rebuildComposition: true)
+    }
+
+    var duration: Double { timeline.duration }
+    var sourceDuration: Double { trackDuration }
+
+    // MARK: - Player
+
+    private func observePlayer() {
+        let interval = CMTime(value: 1, timescale: 30)
+        observers.append(player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+            MainActor.assumeIsolated {
+                guard let self, self.pendingSeek == nil, !self.isSeeking else { return }
+                self.currentTime = min(max(time.seconds, 0), self.duration)
+            }
+        })
+        statusObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
+            let playing = player.timeControlStatus != .paused
+            Task { @MainActor in self?.isPlaying = playing }
+        }
+    }
+
+    func togglePlayback() {
+        if isPlaying {
+            player.pause()
+        } else {
+            if currentTime >= duration - 0.05 { seek(to: 0) }
+            player.play()
+        }
+    }
+
+    /// Scrubbing: always lands exactly on `time`, dropping intermediate requests while a seek runs.
+    func seek(to time: Double) {
+        currentTime = min(max(time, 0), duration)
+        pendingSeek = currentTime
+        performPendingSeek()
+    }
+
+    private func performPendingSeek() {
+        guard !isSeeking, let target = pendingSeek else { return }
+        pendingSeek = nil
+        isSeeking = true
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 6000), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor in
+                self?.isSeeking = false
+                self?.performPendingSeek()
+            }
+        }
+    }
+
+    func step(frames: Int) {
+        player.pause()
+        seek(to: currentTime + Double(frames) / 60)
+    }
+
+    // MARK: - Editing
+
+    /// Applies a change as one undo step, or as part of the current drag.
+    func update(_ change: (inout RecordingEdits) -> Void) {
+        var new = edits
+        change(&new)
+        guard new != edits else { return }
+        if !isInteracting { checkpoint() }
+        apply(new)
+    }
+
+    /// For drags and sliders: one undo step for the whole gesture, and the costly rebuild only at the end.
+    func beginInteraction() {
+        guard !isInteracting else { return }
+        checkpoint()
+        isInteracting = true
+    }
+
+    func endInteraction() {
+        guard isInteracting else { return }
+        isInteracting = false
+        refresh(rebuildComposition: composition == nil || timelineChangedDuringInteraction)
+        timelineChangedDuringInteraction = false
+    }
+
+    private var timelineChangedDuringInteraction = false
+
+    private func checkpoint() {
+        undoStack.append(edits)
+        if undoStack.count > 200 { undoStack.removeFirst() }
+        redoStack.removeAll()
+        updateUndoState()
+    }
+
+    func undo() {
+        guard let previous = undoStack.popLast() else { return }
+        redoStack.append(edits)
+        apply(previous)
+        updateUndoState()
+    }
+
+    func redo() {
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(edits)
+        apply(next)
+        updateUndoState()
+    }
+
+    private func updateUndoState() {
+        canUndo = !undoStack.isEmpty
+        canRedo = !redoStack.isEmpty
+    }
+
+    private func apply(_ new: RecordingEdits) {
+        let old = edits
+        edits = new
+        if new.style != old.style { new.style.rememberAsDefault() }
+        let segmentsChanged = new.segments != old.segments
+        if segmentsChanged {
+            let source = old.segments.isEmpty ? 0 : timeline.sourceTime(atOutput: currentTime)
+            timeline = ClipTimeline(new.segments)
+            currentTime = min(timeline.outputTime(atSource: source), duration)
+        }
+        if let selection, !isSelectionValid(selection) { self.selection = nil }
+
+        if isInteracting {
+            timelineChangedDuringInteraction = timelineChangedDuringInteraction || segmentsChanged
+            // The player keeps the old cut until the drag ends; only the look updates live.
+            if !segmentsChanged { refresh(rebuildComposition: false) }
+        } else {
+            refresh(rebuildComposition: segmentsChanged)
+        }
+        scheduleSave()
+    }
+
+    private func isSelectionValid(_ selection: Selection) -> Bool {
+        switch selection {
+        case let .segment(id): edits.segments.contains { $0.id == id }
+        case let .zoom(id): edits.zooms.contains { $0.id == id }
+        }
+    }
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            save()
+        }
+    }
+
+    func save() {
+        saveTask?.cancel()
+        try? project.save(edits)
+    }
+
+    // MARK: - Rendering
+
+    private func currentScene() -> RenderScene {
+        let style = edits.style
+        let key = [
+            "\(edits.zooms)", "\(style.smoothCursor)", "\(style.hideIdleCursor)",
+        ].joined(separator: "|")
+        if key != motionKey {
+            motionKey = key
+            motion = MotionTrack(recording: cursor, pointSize: metadata.pointSize, duration: trackDuration, zooms: edits.zooms, style: style)
+        }
+        return RenderScene(
+            style: style, motion: motion, timeline: timeline, pointSize: metadata.pointSize,
+            sourceSize: sourceSize, wallpaper: wallpaper, customBackground: loadCustomBackground(style.background)
+        )
+    }
+
+    private func loadCustomBackground(_ background: RecordingBackground) -> CGImage? {
+        guard case let .image(path) = background else { return nil }
+        if let cached = customBackground, cached.path == path { return cached.image }
+        let image = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+        customBackground = (path, image)
+        return image
+    }
+
+    var previewSize: CGSize {
+        let canvas = RecordingRenderer.canvasSize(style: edits.style, sourceSize: sourceSize)
+        return RecordingRenderer.outputSize(canvas: canvas, longSide: Self.previewLongSide)
+    }
+
+    func exportPixelSize(_ size: ExportSize) -> CGSize {
+        let canvas = RecordingRenderer.canvasSize(style: edits.style, sourceSize: sourceSize)
+        return RecordingRenderer.outputSize(canvas: canvas, longSide: CGFloat(size.rawValue))
+    }
+
+    /// Pushes the edits to the renderer and the player. A new video composition makes the player
+    /// redraw even while paused; a new cut needs a new player item.
+    private func refresh(rebuildComposition: Bool) {
+        renderer.update(currentScene())
+        refreshGeneration += 1
+        let generation = refreshGeneration
+        let renderSize = previewSize
+
+        if rebuildComposition || composition == nil {
+            do {
+                composition = try RecordingComposition.make(track: sourceTrack, trackDuration: trackDuration, segments: edits.segments)
+            } catch {
+                return
+            }
+        }
+        guard let composition else { return }
+        let needsItem = rebuildComposition || player.currentItem == nil
+        Task {
+            guard let videoComposition = try? await RecordingComposition.videoComposition(for: composition, renderer: renderer, renderSize: renderSize),
+                  generation == refreshGeneration
+            else { return }
+            if needsItem {
+                let item = AVPlayerItem(asset: composition)
+                item.videoComposition = videoComposition
+                player.replaceCurrentItem(with: item)
+            } else {
+                player.currentItem?.videoComposition = videoComposition
+            }
+            if !isPlaying { seek(to: currentTime) }
+        }
+    }
+
+    // MARK: - Clips
+
+    /// The selected clip, or else the one under the playhead.
+    var activeSegmentIndex: Int? {
+        if case let .segment(id) = selection, let index = edits.segments.firstIndex(where: { $0.id == id }) {
+            return index
+        }
+        return timeline.segmentIndex(atOutput: min(currentTime, max(duration - 0.001, 0)))
+    }
+
+    func splitAtPlayhead() {
+        guard let index = timeline.segmentIndex(atOutput: currentTime) else { return }
+        let segment = edits.segments[index]
+        let source = timeline.sourceTime(atOutput: currentTime)
+        guard source - segment.start > 0.1, segment.end - source > 0.1 else { return }
+        update { edits in
+            edits.segments[index].end = source
+            edits.segments.insert(ClipSegment(start: source, end: segment.end, speed: segment.speed), at: index + 1)
+        }
+        selection = .segment(edits.segments[index + 1].id)
+    }
+
+    func deleteSegment(_ id: UUID) {
+        guard edits.segments.count > 1 else { return }
+        update { $0.segments.removeAll { $0.id == id } }
+    }
+
+    func setSpeed(_ speed: Double, for index: Int) {
+        guard edits.segments.indices.contains(index) else { return }
+        update { $0.segments[index].speed = speed }
+    }
+
+    /// Trims one end of a clip to `time` (source seconds), without overlapping its neighbours.
+    func trim(_ id: UUID, leading: Bool, to time: Double) {
+        guard let index = edits.segments.firstIndex(where: { $0.id == id }) else { return }
+        update { edits in
+            var segment = edits.segments[index]
+            if leading {
+                let lower = index > 0 ? edits.segments[index - 1].end : 0
+                segment.start = min(max(time, lower), segment.end - 0.25)
+            } else {
+                let upper = index + 1 < edits.segments.count ? edits.segments[index + 1].start : trackDuration
+                segment.end = max(min(time, upper), segment.start + 0.25)
+            }
+            edits.segments[index] = segment
+        }
+    }
+
+    // MARK: - Zooms
+
+    /// Adds a hand-made zoom over `range` (output seconds), shrunk to fit between the zooms around it.
+    func addZoom(output range: ClosedRange<Double>) {
+        var start = timeline.sourceTime(atOutput: range.lowerBound)
+        var end = timeline.sourceTime(atOutput: range.upperBound)
+        if let before = edits.zooms.last(where: { $0.start <= start }), before.end > start {
+            start = before.end
+        }
+        if let after = edits.zooms.first(where: { $0.start >= start }), after.start < end {
+            end = after.start
+        }
+        guard end - start >= 0.4 else { return }
+        let zoom = ZoomSegment(start: start, end: end, scale: edits.style.zoomScale, isAuto: false)
+        update { edits in
+            edits.zooms.append(zoom)
+            edits.zooms.sort { $0.start < $1.start }
+        }
+        selection = .zoom(zoom.id)
+        inspector = .zoom
+    }
+
+    func deleteZoom(_ id: UUID) {
+        update { $0.zooms.removeAll { $0.id == id } }
+    }
+
+    /// Moves or resizes a zoom to `start`...`end` (source seconds), stopping at its neighbours.
+    func setZoom(_ id: UUID, start: Double, end: Double) {
+        guard let index = edits.zooms.firstIndex(where: { $0.id == id }) else { return }
+        let lower = index > 0 ? edits.zooms[index - 1].end : 0
+        let upper = index + 1 < edits.zooms.count ? edits.zooms[index + 1].start : trackDuration
+        var start = start, end = end
+        let length = end - start
+        if start < lower { start = lower; end = max(end, start + min(length, 0.4)) }
+        if end > upper { end = upper; start = min(start, end - min(length, 0.4)) }
+        guard end - start >= 0.3 else { return }
+        update { edits in
+            edits.zooms[index].start = start
+            edits.zooms[index].end = end
+        }
+    }
+
+    func setAutoZoom(_ enabled: Bool) {
+        update { edits in
+            edits.style.autoZoom = enabled
+            let manual = edits.zooms.filter { !$0.isAuto }
+            edits.zooms = enabled
+                ? AutoZoom.segments(clicks: cursor.clicks, duration: trackDuration, scale: edits.style.zoomScale, keeping: manual)
+                : manual
+        }
+    }
+
+    /// The default zoom level, also applied to every auto zoom.
+    func setDefaultZoomScale(_ scale: Double) {
+        update { edits in
+            edits.style.zoomScale = scale
+            for index in edits.zooms.indices where edits.zooms[index].isAuto {
+                edits.zooms[index].scale = scale
+            }
+        }
+    }
+
+    func deleteSelection() {
+        switch selection {
+        case let .segment(id): deleteSegment(id)
+        case let .zoom(id): deleteZoom(id)
+        case nil: break
+        }
+    }
+
+    // MARK: - Export
+
+    func startExport() {
+        guard let composition, !isExporting else { return }
+        player.pause()
+        let size = exportPixelSize(exportSize)
+        let url = Self.exportURL(named: metadata.title)
+        // A frozen copy of the edits: changing things while exporting doesn't affect the file.
+        let exportRenderer = RecordingRenderer(scene: renderer.currentScene)
+        export = .exporting(0)
+        Task {
+            do {
+                let videoComposition = try await RecordingComposition.videoComposition(for: composition, renderer: exportRenderer, renderSize: size)
+                try await RecordingComposition.export(composition, videoComposition: videoComposition, to: url) { progress in
+                    Task { @MainActor in
+                        guard case .exporting = self.export else { return }
+                        self.export = .exporting(progress)
+                    }
+                }
+                export = .done(url)
+                if Preferences.shared.copyToClipboard { copyFile(url) }
+            } catch {
+                export = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    var isExporting: Bool {
+        if case .exporting = export { return true }
+        return false
+    }
+
+    func resetExport() {
+        if !isExporting { export = .idle }
+    }
+
+    func copyFile(_ url: URL) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([url as NSURL])
+    }
+
+    private static func exportURL(named name: String) -> URL {
+        let folder = Preferences.shared.saveFolder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var url = folder.appendingPathComponent(name).appendingPathExtension("mp4")
+        var counter = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = folder.appendingPathComponent("\(name) (\(counter))").appendingPathExtension("mp4")
+            counter += 1
+        }
+        return url
+    }
+
+    // MARK: - Closing
+
+    func close() {
+        player.pause()
+        save()
+        observers.forEach(player.removeTimeObserver)
+        observers.removeAll()
+        statusObservation = nil
+        player.replaceCurrentItem(with: nil)
+    }
+}

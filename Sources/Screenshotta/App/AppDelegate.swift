@@ -1,13 +1,20 @@
 import AppKit
+import Combine
 import ImageIO
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
+    private let statusMenu = NSMenu()
+    private var recordingObserver: AnyCancellable?
+    private var recordingTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainMenu.install()
         BackgroundCursor.enable()
         setupStatusItem()
+        recordingObserver = RecordingController.shared.$state.sink { [weak self] state in
+            self?.updateStatusItem(for: state)
+        }
         HotKeyManager.shared.reloadCaptureShortcuts()
         ShakeDetector.shared.isEnabled = Preferences.shared.shakeToOpenShelf
 
@@ -31,14 +38,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
+        statusMenu.delegate = self
+        updateStatusItem(for: .idle)
+    }
+
+    /// While recording, the menu bar item shows the elapsed time and a click stops the recording.
+    private func updateStatusItem(for state: RecordingController.State) {
+        guard let button = statusItem.button else { return }
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+
+        guard case let .recording(since) = state else {
             let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Screenshotta")
             image?.isTemplate = true
             button.image = image
+            button.title = ""
+            button.action = nil
+            statusItem.length = NSStatusItem.squareLength
+            statusItem.menu = statusMenu
+            return
         }
-        let menu = NSMenu()
-        menu.delegate = self
-        statusItem.menu = menu
+
+        statusItem.menu = nil
+        statusItem.length = NSStatusItem.variableLength
+        button.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "Stop Recording")?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular).applying(.init(paletteColors: [.white, .systemRed])))
+        button.imagePosition = .imageLeading
+        button.target = self
+        button.action = #selector(toggleRecording)
+        button.toolTip = "Stop Recording"
+        let tick = { [weak button] in
+            let seconds = Int(Date().timeIntervalSince(since))
+            button?.title = " \(seconds / 60):\(String(format: "%02d", seconds % 60))"
+        }
+        tick()
+        let timer = Timer(timeInterval: 0.5, repeats: true) { _ in MainActor.assumeIsolated { tick() } }
+        RunLoop.main.add(timer, forMode: .common)
+        recordingTimer = timer
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -54,6 +90,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         window.image = NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil)
         prefs.windowShortcut?.apply(to: window)
         menu.addItem(window)
+
+        let record = NSMenuItem(title: "Record Screen", action: #selector(toggleRecording), keyEquivalent: "")
+        record.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
+        prefs.recordShortcut?.apply(to: record)
+        menu.addItem(record)
+        addRecentRecordings(to: menu)
 
         menu.addItem(.separator())
         addShelfItems(to: menu)
@@ -71,6 +113,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) {
             item.target = self
         }
+    }
+
+    private func addRecentRecordings(to menu: NSMenu) {
+        let recent = RecordingProject.recent(limit: 6)
+        guard !recent.isEmpty else { return }
+        let item = NSMenuItem(title: "Recent Recordings", action: nil, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: "film.stack", accessibilityDescription: nil)
+        let submenu = NSMenu()
+        for (project, metadata) in recent {
+            let entry = NSMenuItem(title: metadata.title, action: #selector(reopenRecording(_:)), keyEquivalent: "")
+            entry.representedObject = project.folder
+            entry.target = self
+            let length = Self.durationFormatter.string(from: metadata.duration) ?? ""
+            if #available(macOS 14.4, *) {
+                entry.subtitle = length
+            } else {
+                entry.title = "\(metadata.title)  ·  \(length)"
+            }
+            submenu.addItem(entry)
+        }
+        submenu.addItem(.separator())
+        let folder = NSMenuItem(title: "Show All in Finder", action: #selector(openRecordingsFolder), keyEquivalent: "")
+        folder.target = self
+        submenu.addItem(folder)
+        item.submenu = submenu
+        menu.addItem(item)
+    }
+
+    private static let durationFormatter: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.minute, .second]
+        formatter.zeroFormattingBehavior = .pad
+        return formatter
+    }()
+
+    @objc private func toggleRecording() {
+        RecordingController.shared.toggle()
+    }
+
+    @objc private func reopenRecording(_ sender: NSMenuItem) {
+        guard let folder = sender.representedObject as? URL else { return }
+        RecordingEditorWindowController.open(RecordingProject(folder: folder))
+    }
+
+    @objc private func openRecordingsFolder() {
+        let folder = RecordingProject.libraryFolder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(folder)
     }
 
     private func addShelfItems(to menu: NSMenu) {

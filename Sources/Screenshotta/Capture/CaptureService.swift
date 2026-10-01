@@ -64,7 +64,7 @@ enum CaptureService {
         return CapturedImage(image: image, scale: scale)
     }
 
-    private static func pixelAligned(_ rect: CGRect, scale: CGFloat) -> CGRect {
+    static func pixelAligned(_ rect: CGRect, scale: CGFloat) -> CGRect {
         let minX = (rect.minX * scale).rounded() / scale
         let minY = (rect.minY * scale).rounded() / scale
         let maxX = (rect.maxX * scale).rounded() / scale
@@ -101,10 +101,7 @@ enum CaptureService {
         let prefs = Preferences.shared
         var wallpaper: CGImage?
         if prefs.windowBackground == .wallpaper {
-            wallpaper = try? await captureWallpaper(of: display, content: content, scale: scale)
-            if wallpaper == nil {
-                wallpaper = wallpaperFromFile(for: display, scale: scale)
-            }
+            wallpaper = await self.wallpaper(of: display, content: content, scale: scale)
         }
 
         let style = WindowStyler.Style(
@@ -123,6 +120,14 @@ enum CaptureService {
             style: style
         )
         return CapturedImage(image: composed ?? windowImage, scale: scale)
+    }
+
+    /// The display's desktop picture at `scale`: captured live, or read from its file.
+    static func wallpaper(of display: SCDisplay, content: SCShareableContent, scale: CGFloat) async -> CGImage? {
+        if let captured = try? await captureWallpaper(of: display, content: content, scale: scale) {
+            return captured
+        }
+        return wallpaperFromFile(for: display, scale: scale)
     }
 
     /// Captures only the wallpaper windows (they sit below the desktop icons), so the
