@@ -168,17 +168,16 @@ final class SelectionController {
 
     // MARK: - Window list
 
-    /// Normal app windows, front to back.
+    /// Normal app windows, front to back, ours included (our panels sit above the normal window layer).
     private static func onScreenWindows() -> [WindowCandidate] {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return []
         }
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        let ownPID = ProcessInfo.processInfo.processIdentifier
 
         return list.compactMap { info in
             guard (info[kCGWindowLayer as String] as? Int) == 0,
-                  let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
+                  let pid = info[kCGWindowOwnerPID as String] as? pid_t,
                   let number = info[kCGWindowNumber as String] as? CGWindowID,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),

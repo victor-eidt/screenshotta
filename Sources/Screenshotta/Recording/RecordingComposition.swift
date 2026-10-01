@@ -37,17 +37,18 @@ nonisolated enum RecordingComposition {
         return composition
     }
 
-    static func videoComposition(for asset: AVAsset, renderer: RecordingRenderer, renderSize: CGSize) async throws -> AVVideoComposition {
-        let composition = try await AVMutableVideoComposition.videoComposition(with: asset, applyingCIFiltersWithHandler: handler(renderer))
+    /// `timeline` describes the cut in `asset`: frames are drawn with the pointer and camera of exactly that cut.
+    static func videoComposition(for asset: AVAsset, timeline: ClipTimeline, renderer: RecordingRenderer, renderSize: CGSize) async throws -> AVVideoComposition {
+        let composition = try await AVMutableVideoComposition.videoComposition(with: asset, applyingCIFiltersWithHandler: handler(renderer, timeline: timeline))
         composition.renderSize = renderSize
         // A steady 60 fps even where the screen (and so the recording) stood still: the pointer and camera keep moving.
         composition.frameDuration = CMTime(value: 1, timescale: 60)
         return composition
     }
 
-    private static func handler(_ renderer: RecordingRenderer) -> @Sendable (AVAsynchronousCIImageFilteringRequest) -> Void {
+    private static func handler(_ renderer: RecordingRenderer, timeline: ClipTimeline) -> @Sendable (AVAsynchronousCIImageFilteringRequest) -> Void {
         { request in
-            let image = renderer.render(source: request.sourceImage, outputTime: request.compositionTime.seconds, renderSize: request.renderSize)
+            let image = renderer.render(source: request.sourceImage, outputTime: request.compositionTime.seconds, timeline: timeline, renderSize: request.renderSize)
             request.finish(with: image, context: RecordingRenderer.context)
         }
     }

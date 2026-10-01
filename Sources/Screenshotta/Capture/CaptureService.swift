@@ -40,9 +40,7 @@ enum CaptureService {
               let display = content.displays.first(where: { $0.displayID == displayID })
         else { throw CaptureError.displayNotFound }
 
-        // Our overlay and thumbnail never end up in the shot.
-        let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
-        let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
+        let filter = displayFilter(display, content: content)
 
         // Display-local, top-left origin, snapped to whole device pixels: a fractional
         // rect (mouse positions often are) makes ScreenCaptureKit resample and blur text.
@@ -70,6 +68,18 @@ enum CaptureService {
         let maxX = (rect.maxX * scale).rounded() / scale
         let maxY = (rect.maxY * scale).rounded() / scale
         return CGRect(x: minX, y: minY, width: max(maxX - minX, 1 / scale), height: max(maxY - minY, 1 / scale))
+    }
+
+    /// The whole display minus our own overlays: the selection overlay, thumbnail, shelves and recording
+    /// panels never end up in a capture, while our regular windows (the editors, Settings) are captured
+    /// like any app's. Excluding the app as a whole also covers panels that appear later, mid-recording.
+    static func displayFilter(_ display: SCDisplay, content: SCShareableContent) -> SCContentFilter {
+        let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        let regular = Set(NSApp.windows
+            .filter { $0.isVisible && !($0 is NSPanel) && $0.styleMask.contains(.titled) }
+            .map { CGWindowID($0.windowNumber) })
+        let shown = content.windows.filter { regular.contains($0.windowID) }
+        return SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: shown)
     }
 
     // MARK: - Window

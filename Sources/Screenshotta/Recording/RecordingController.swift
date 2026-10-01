@@ -133,8 +133,6 @@ final class RecordingController: ObservableObject {
     }
 
     private func makeSetup(_ target: RecordingTarget, content: SCShareableContent) throws -> Setup {
-        let ownApps = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
-
         func display(for screen: NSScreen) throws -> SCDisplay {
             guard let id = screen.displayID, let display = content.displays.first(where: { $0.displayID == id }) else {
                 throw CaptureError.displayNotFound
@@ -146,7 +144,7 @@ final class RecordingController: ObservableObject {
         case let .area(rect, screen):
             let display = try display(for: screen)
             // Our own panels (the outline, the countdown) never end up in the video.
-            let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
+            let filter = CaptureService.displayFilter(display, content: content)
             let scale = CGFloat(filter.pointPixelScale)
             var local = CaptureService.pixelAligned(CGRect(
                 x: rect.minX - screen.frame.minX,
@@ -172,7 +170,7 @@ final class RecordingController: ObservableObject {
 
         case let .display(screen):
             let display = try display(for: screen)
-            let filter = SCContentFilter(display: display, excludingApplications: ownApps, exceptingWindows: [])
+            let filter = CaptureService.displayFilter(display, content: content)
             let scale = CGFloat(filter.pointPixelScale)
             let configuration = ScreenRecorder.configuration(
                 width: Int((screen.frame.width * scale).rounded()),

@@ -101,6 +101,8 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
     var cornerRadius: Double = 12
     var shadow: Double = 0.6
     var aspect: RecordingAspect = .auto
+    /// Window recordings: replace the app's own title bar with a thin plain one.
+    var minimalWindowFrame = true
 
     var showCursor = true
     var cursorStyle: CursorStyle = .arrow
@@ -140,6 +142,7 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
         cornerRadius = (try? c.decode(Double.self, forKey: .cornerRadius)) ?? d.cornerRadius
         shadow = (try? c.decode(Double.self, forKey: .shadow)) ?? d.shadow
         aspect = (try? c.decode(RecordingAspect.self, forKey: .aspect)) ?? d.aspect
+        minimalWindowFrame = (try? c.decode(Bool.self, forKey: .minimalWindowFrame)) ?? d.minimalWindowFrame
         showCursor = (try? c.decode(Bool.self, forKey: .showCursor)) ?? d.showCursor
         cursorStyle = (try? c.decode(CursorStyle.self, forKey: .cursorStyle)) ?? d.cursorStyle
         cursorSize = (try? c.decode(Double.self, forKey: .cursorSize)) ?? d.cursorSize
@@ -152,7 +155,7 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case background, backgroundBlur, padding, cornerRadius, shadow, aspect
+        case background, backgroundBlur, padding, cornerRadius, shadow, aspect, minimalWindowFrame
         case showCursor, cursorStyle, cursorSize, smoothCursor, cursorMotionBlur, hideIdleCursor, clickEffect
         case autoZoom, zoomScale
     }
@@ -163,6 +166,12 @@ nonisolated struct RecordingEdits: Codable, Equatable, Sendable {
     var segments: [ClipSegment]
     var zooms: [ZoomSegment]
     var style: RecordingStyle
+    /// Window recordings: points of the app's own top bar to cut off for the minimal frame.
+    /// Found from the traffic lights when the recording is first opened.
+    var windowTopTrim: Double?
+    /// Points cut from the left and right edges.
+    var cutLeft: Double?
+    var cutRight: Double?
 
     static func initial(duration: Double, clicks: [CursorRecording.Sample], style: RecordingStyle) -> RecordingEdits {
         var edits = RecordingEdits(segments: [ClipSegment(start: 0, end: duration)], zooms: [], style: style)

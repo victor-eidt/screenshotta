@@ -6,12 +6,50 @@ import CoreImage.CIFilterBuiltins
 nonisolated struct RenderScene: @unchecked Sendable {
     var style: RecordingStyle
     var motion: MotionTrack
-    var timeline: ClipTimeline
     /// The recording, in points and in video pixels.
     var pointSize: CGSize
     var sourceSize: CGSize
     var wallpaper: CGImage?
     var customBackground: CGImage?
+    var frame: RecordingFrame?
+
+    /// The recording as framed: cut at the sides, and with its title bar replaced.
+    var contentSize: CGSize { frame?.size(of: sourceSize) ?? sourceSize }
+
+    /// A point of the recording (normalized, top-left origin) in the framed recording (same units).
+    func framed(_ p: CGPoint) -> CGPoint {
+        guard let frame else { return p }
+        let size = contentSize
+        return CGPoint(
+            x: (p.x * sourceSize.width - frame.left) / size.width,
+            y: (p.y * sourceSize.height - frame.top + frame.bar) / size.height
+        )
+    }
+}
+
+/// What's cut from the recording's edges. For windows, also the minimal title bar: the app's own top bar
+/// (a title bar, a toolbar, Chrome's tab strip) is cut off and a thin plain one with just the traffic lights
+/// takes its place, so every window looks alike.
+nonisolated struct RecordingFrame: @unchecked Sendable {
+    /// Height of the drawn bar, in points.
+    static let barHeight: CGFloat = 30
+
+    /// Video pixels cut from each edge.
+    var top: CGFloat = 0
+    var left: CGFloat = 0
+    var right: CGFloat = 0
+    /// The new title bar, in video pixels (0 for none).
+    var bar: CGFloat = 0
+    /// Video pixels per point.
+    var scale: CGFloat
+    /// Matches what's right under the cut, so the bar blends into the window.
+    var barColor: CGColor?
+    /// Fills the window's own rounded corners, so all four follow the chosen corner radius.
+    var fillColor: CGColor?
+
+    func size(of source: CGSize) -> CGSize {
+        CGSize(width: max(source.width - left - right, 2), height: max(source.height - top, 2) + bar)
+    }
 }
 
 /// Draws one output frame: background, shadow, the rounded recording, pointer, clicks, then the camera on top.
@@ -66,28 +104,59 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
 
     // MARK: - Frame
 
-    func render(source: CIImage, outputTime: Double, renderSize: CGSize) -> CIImage {
+    /// `timeline` is the cut of the video being drawn, which may lag behind the latest edits for a moment:
+    /// the pointer and camera must follow the frames actually on screen.
+    func render(source: CIImage, outputTime: Double, timeline: ClipTimeline, renderSize: CGSize) -> CIImage {
         let scene = currentScene
         let style = scene.style
-        let t = scene.timeline.sourceTime(atOutput: outputTime)
-        let rect = Self.contentRect(style: style, sourceSize: scene.sourceSize, outputSize: renderSize)
+        let t = timeline.sourceTime(atOutput: outputTime)
+        let rect = Self.contentRect(style: style, sourceSize: scene.contentSize, outputSize: renderSize)
         /// Output pixels per recording point.
         let unit = rect.width / max(scene.pointSize.width, 1)
         let camera = scene.motion.camera(at: t)
+        /// A point of the recording (normalized, top-left origin) on the output.
+        let place = { (p: CGPoint) -> CGPoint in
+            let q = scene.framed(p)
+            return CGPoint(x: rect.minX + q.x * rect.width, y: rect.maxY - q.y * rect.height)
+        }
 
         var image = backdrop(for: scene, rect: rect, size: renderSize)
-        image = recording(source, in: rect, radius: style.cornerRadius * unit, zoom: camera.scale).composited(over: image)
+        let framed = Self.framedSource(source, frame: scene.frame)
+        image = recording(framed, in: rect, radius: style.cornerRadius * unit, zoom: camera.scale).composited(over: image)
         if style.showCursor {
             if style.clickEffect {
-                for ripple in ripples(scene: scene, at: t, rect: rect, unit: unit) {
+                for ripple in ripples(scene: scene, at: t, unit: unit, place: place) {
                     image = ripple.composited(over: image)
                 }
             }
-            if let pointer = pointer(scene: scene, at: t, rect: rect, unit: unit) {
+            if let pointer = pointer(scene: scene, at: t, unit: unit, place: place) {
                 image = pointer.composited(over: image)
             }
         }
-        return applyCamera(camera, to: image, rect: rect, size: renderSize)
+        // The camera works in the framed recording already.
+        let focus = CGPoint(x: rect.minX + camera.x * rect.width, y: rect.maxY - camera.y * rect.height)
+        return applyCamera(camera, focus: focus, to: image, size: renderSize)
+    }
+
+    /// The video frame cut at its edges and with its title bar replaced, when framed; origin at zero either way.
+    private static func framedSource(_ source: CIImage, frame: RecordingFrame?) -> CIImage {
+        let extent = source.extent
+        let image = source.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+        guard let frame else { return image }
+        // Core Image's origin is at the bottom, so the top of the window is the end of the kept range.
+        let size = frame.size(of: extent.size)
+        let kept = CGRect(x: frame.left, y: 0, width: size.width, height: size.height - frame.bar)
+        var framed = image.cropped(to: kept).transformed(by: CGAffineTransform(translationX: -frame.left, y: 0))
+        let area = CGRect(x: 0, y: 0, width: kept.width, height: kept.height)
+        if let fill = frame.fillColor {
+            framed = framed.composited(over: CIImage(color: CIColor(cgColor: fill)).cropped(to: area))
+        }
+        if frame.bar > 0, let bar = WindowChromeArt.bar(width: Int(size.width), frame: frame) {
+            framed = CIImage(cgImage: bar)
+                .transformed(by: CGAffineTransform(translationX: 0, y: kept.height))
+                .composited(over: framed)
+        }
+        return framed
     }
 
     /// The recording scaled into place and clipped to its rounded corners. When it ends up smaller than
@@ -123,7 +192,7 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
         ])
     }
 
-    private func pointer(scene: RenderScene, at t: Double, rect: CGRect, unit: CGFloat) -> CIImage? {
+    private func pointer(scene: RenderScene, at t: Double, unit: CGFloat, place: (CGPoint) -> CGPoint) -> CIImage? {
         let style = scene.style
         let state = scene.motion.cursor(at: t)
         guard state.opacity > 0.01 else { return nil }
@@ -136,7 +205,7 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
         let height = CursorArt.baseHeight * style.cursorSize * unit * press
         guard height >= 2, let art = CursorArt.image(style.cursorStyle, height: height) else { return nil }
 
-        let tip = CGPoint(x: rect.minX + state.point.x * rect.width, y: rect.maxY - state.point.y * rect.height)
+        let tip = place(state.point)
         let artScale = height / CGFloat(art.image.height)
         var image = CIImage(cgImage: art.image)
             .transformed(by: CGAffineTransform(scaleX: artScale, y: artScale))
@@ -144,8 +213,10 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
         image = image.transformed(by: CGAffineTransform(translationX: tip.x - hotspot.x, y: tip.y - hotspot.y))
 
         if style.cursorMotionBlur {
-            let vx = state.velocity.dx * rect.width
-            let vy = -state.velocity.dy * rect.height
+            // Output pixels per second, from a step along the velocity.
+            let ahead = place(CGPoint(x: state.point.x + state.velocity.dx / 60, y: state.point.y + state.velocity.dy / 60))
+            let vx = (ahead.x - tip.x) * 60
+            let vy = (ahead.y - tip.y) * 60
             // Roughly the distance travelled while a frame is exposed.
             let radius = min(hypot(vx, vy) / 60 * 0.3, height)
             if radius > 2.5 {
@@ -162,7 +233,7 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
         return image
     }
 
-    private func ripples(scene: RenderScene, at t: Double, rect: CGRect, unit: CGFloat) -> [CIImage] {
+    private func ripples(scene: RenderScene, at t: Double, unit: CGFloat, place: (CGPoint) -> CGPoint) -> [CIImage] {
         let duration = 0.55
         return scene.motion.clicks.compactMap { click in
             let age = t - click.t
@@ -171,8 +242,7 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
             let eased = 1 - pow(1 - p, 3)
             let radius = (6 + 20 * eased) * unit * max(scene.style.cursorSize, 0.8) * 0.75
             let alpha = 0.55 * (1 - p)
-            let center = scene.motion.cursor(at: click.t).point
-            let c = CGPoint(x: rect.minX + center.x * rect.width, y: rect.maxY - center.y * rect.height)
+            let c = place(scene.motion.cursor(at: click.t).point)
             let k = radius * 2 / CGFloat(ring.width)
             return CIImage(cgImage: ring)
                 .transformed(by: CGAffineTransform(scaleX: k, y: k).concatenating(CGAffineTransform(translationX: c.x - radius, y: c.y - radius)))
@@ -180,23 +250,15 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
         }
     }
 
-    /// Zooms the whole picture around the focus point. The view stays inside the recording while it fits,
-    /// and centered on it while it doesn't, so the camera never shows past the edge of the canvas.
-    private func applyCamera(_ camera: CameraState, to image: CIImage, rect: CGRect, size: CGSize) -> CIImage {
+    /// Zooms the whole picture into a view centered on `focus`. The motion track already keeps the view
+    /// inside the recording; this only guards against showing past the edge of the canvas.
+    private func applyCamera(_ camera: CameraState, focus: CGPoint, to image: CIImage, size: CGSize) -> CIImage {
         let bounds = CGRect(origin: .zero, size: size)
         guard camera.scale > 1.001 else { return image.cropped(to: bounds) }
         let s = camera.scale
-        let focus = CGPoint(x: rect.minX + camera.x * rect.width, y: rect.maxY - camera.y * rect.height)
         let view = CGSize(width: size.width / s, height: size.height / s)
-
-        func origin(_ focus: CGFloat, _ length: CGFloat, _ min: CGFloat, _ max: CGFloat, _ mid: CGFloat, _ canvas: CGFloat) -> CGFloat {
-            let value = length <= max - min
-                ? Swift.min(Swift.max(focus - length / 2, min), max - length)
-                : mid - length / 2
-            return Swift.min(Swift.max(value, 0), canvas - length)
-        }
-        let x = origin(focus.x, view.width, rect.minX, rect.maxX, rect.midX, size.width)
-        let y = origin(focus.y, view.height, rect.minY, rect.maxY, rect.midY, size.height)
+        let x = min(max(focus.x - view.width / 2, 0), size.width - view.width)
+        let y = min(max(focus.y - view.height / 2, 0), size.height - view.height)
         let transform = CGAffineTransform(translationX: -x, y: -y).concatenating(CGAffineTransform(scaleX: s, y: s))
         return image.transformed(by: transform).cropped(to: bounds)
     }
@@ -207,7 +269,7 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
     private func backdrop(for scene: RenderScene, rect: CGRect, size: CGSize) -> CIImage {
         let style = scene.style
         let key = [
-            "\(style.background)", "\(style.backgroundBlur)", "\(style.shadow)", "\(style.cornerRadius)",
+            "\(style.background)", "\(style.backgroundBlur)", "\(style.shadow)", "\(style.cornerRadius)", "\(scene.pointSize)",
             "\(rect)", "\(size)",
             scene.wallpaper.map { "\(ObjectIdentifier($0))" } ?? "-",
             scene.customBackground.map { "\(ObjectIdentifier($0))" } ?? "-",
@@ -218,21 +280,31 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
         var image = Self.background(scene: scene, size: size)
         if style.shadow > 0.01 {
             let unit = rect.width / max(scene.pointSize.width, 1)
-            let shape = CIFilter.roundedRectangleGenerator()
-            shape.extent = rect
-            shape.radius = Float(min(style.cornerRadius * unit, rect.width / 2, rect.height / 2))
-            shape.color = CIColor(red: 0, green: 0, blue: 0, alpha: 0.25 + 0.55 * style.shadow)
-            if let shadow = shape.outputImage {
-                let blur = (6 + 44 * style.shadow) * unit
-                let soft = shadow.clampedToExtent().cropped(to: rect.insetBy(dx: -blur * 3, dy: -blur * 3))
-                    .applyingGaussianBlur(sigma: blur / 2)
-                    .transformed(by: CGAffineTransform(translationX: 0, y: -blur * 0.35))
-                image = soft.cropped(to: rect.insetBy(dx: -blur * 3, dy: -blur * 3)).composited(over: image)
-            }
+            let radius = min(style.cornerRadius * unit, rect.width / 2, rect.height / 2)
+            // A wide, soft shadow for depth plus a tight one that defines the edge.
+            let ambient = (18 + 50 * style.shadow) * unit
+            image = Self.shadow(rect: rect, radius: radius, blur: ambient, opacity: 0.16 + 0.34 * style.shadow, offset: ambient * 0.28)
+                .composited(over: image)
+            image = Self.shadow(rect: rect, radius: radius, blur: 2.5 * unit, opacity: 0.12 + 0.2 * style.shadow, offset: 0.8 * unit)
+                .composited(over: image)
         }
         let flat = Self.context.createCGImage(image.cropped(to: bounds), from: bounds).map { CIImage(cgImage: $0) } ?? image
         lock.withLock { backdrop = (key, flat) }
         return flat
+    }
+
+    /// A rounded rectangle's shadow, faded out smoothly on every side.
+    private static func shadow(rect: CGRect, radius: CGFloat, blur: CGFloat, opacity: Double, offset: CGFloat) -> CIImage {
+        let shape = CIFilter.roundedRectangleGenerator()
+        shape.extent = rect
+        shape.radius = Float(radius)
+        shape.color = CIColor(red: 0, green: 0, blue: 0, alpha: opacity)
+        let area = rect.insetBy(dx: -blur * 3, dy: -blur * 3)
+        // Blurred over transparent space: the shape's own extent ends at its edges.
+        let padded = (shape.outputImage ?? CIImage.empty()).composited(over: CIImage(color: .clear).cropped(to: area))
+        return padded.applyingGaussianBlur(sigma: blur / 2)
+            .cropped(to: area)
+            .transformed(by: CGAffineTransform(translationX: 0, y: -offset))
     }
 
     static func background(scene: RenderScene, size: CGSize) -> CIImage {
@@ -359,6 +431,79 @@ nonisolated enum CursorArt {
         ctx.strokeEllipse(in: rect)
         return ctx.makeImage()
     }()
+}
+
+nonisolated enum WindowChromeArt {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cache: [String: CGImage] = [:]
+
+    private static let lights: [CGColor] = [
+        CGColor(srgbRed: 1.00, green: 0.373, blue: 0.341, alpha: 1),
+        CGColor(srgbRed: 0.996, green: 0.737, blue: 0.180, alpha: 1),
+        CGColor(srgbRed: 0.157, green: 0.784, blue: 0.251, alpha: 1),
+    ]
+
+    /// The plain bar: the sampled color with three traffic lights on the left.
+    static func bar(width: Int, frame: RecordingFrame) -> CGImage? {
+        let height = max(1, Int(frame.bar.rounded()))
+        let color = frame.barColor ?? CGColor(gray: 0.93, alpha: 1)
+        let key = "\(width)x\(height)@\(frame.scale)-\(color.components ?? [])"
+        if let cached = lock.withLock({ cache[key] }) { return cached }
+        guard let ctx = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        ctx.setFillColor(color)
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        let k = frame.scale
+        let diameter = 12.5 * k
+        let centerY = CGFloat(height) / 2
+        ctx.setLineWidth(0.5 * k)
+        for (i, color) in lights.enumerated() {
+            let center = CGPoint(x: (19 + CGFloat(i) * 20) * k, y: centerY)
+            let circle = CGRect(x: center.x - diameter / 2, y: center.y - diameter / 2, width: diameter, height: diameter)
+            ctx.setFillColor(color)
+            ctx.fillEllipse(in: circle)
+            ctx.setStrokeColor(CGColor(gray: 0, alpha: 0.14))
+            ctx.strokeEllipse(in: circle.insetBy(dx: 0.25 * k, dy: 0.25 * k))
+        }
+        guard let image = ctx.makeImage() else { return nil }
+        lock.withLock {
+            if cache.count > 16 { cache.removeAll() }
+            cache[key] = image
+        }
+        return image
+    }
+
+    /// The most common color along one row of `image` (rows counted from the top), ignoring the edges.
+    /// The most common rather than the average, so icons and text in a toolbar don't tint the result.
+    static func dominantColor(of image: CGImage, row: Int) -> CGColor? {
+        let y = min(max(row, 0), image.height - 1)
+        let x = image.width / 6
+        let width = max(1, image.width - x * 2)
+        guard let strip = image.cropping(to: CGRect(x: x, y: y, width: width, height: 1)),
+              let ctx = CGContext(
+                  data: nil, width: width, height: 1, bitsPerComponent: 8, bytesPerRow: width * 4,
+                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ),
+              let data = ctx.data
+        else { return nil }
+        ctx.draw(strip, in: CGRect(x: 0, y: 0, width: width, height: 1))
+        let bytes = data.bindMemory(to: UInt8.self, capacity: width * 4)
+
+        var bins: [Int: (count: Int, r: Int, g: Int, b: Int)] = [:]
+        for i in 0..<width {
+            let r = Int(bytes[i * 4]), g = Int(bytes[i * 4 + 1]), b = Int(bytes[i * 4 + 2]), a = Int(bytes[i * 4 + 3])
+            guard a > 200 else { continue }
+            let key = (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3)
+            let bin = bins[key] ?? (0, 0, 0, 0)
+            bins[key] = (bin.count + 1, bin.r + r, bin.g + g, bin.b + b)
+        }
+        guard let top = bins.values.max(by: { $0.count < $1.count }) else { return nil }
+        let n = CGFloat(top.count) * 255
+        return CGColor(srgbRed: CGFloat(top.r) / n, green: CGFloat(top.g) / n, blue: CGFloat(top.b) / n, alpha: 1)
+    }
 }
 
 nonisolated enum BackgroundArt {

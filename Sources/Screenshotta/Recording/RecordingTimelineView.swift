@@ -131,8 +131,16 @@ private struct ClipBlock: View {
     let pps: CGFloat
 
     @State private var trimOrigin: ClipSegment?
+    /// Resets when the drag ends or is cancelled; `onEnded` only runs for the first.
+    @GestureState private var isTrimming = false
 
     private var isSelected: Bool { doc.selection == .segment(segment.id) }
+
+    private func finishTrim() {
+        guard trimOrigin != nil else { return }
+        trimOrigin = nil
+        doc.endInteraction()
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -170,6 +178,9 @@ private struct ClipBlock: View {
                 .overlay(alignment: .leading) { handle(leading: true) }
                 .overlay(alignment: .trailing) { handle(leading: false) }
         }
+        .onChange(of: isTrimming) { _, trimming in
+            if !trimming { finishTrim() }
+        }
     }
 
     private func handle(leading: Bool) -> some View {
@@ -184,6 +195,7 @@ private struct ClipBlock: View {
             }
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .updating($isTrimming) { _, state, _ in state = true }
                     .onChanged { value in
                         if trimOrigin == nil {
                             trimOrigin = segment
@@ -194,10 +206,7 @@ private struct ClipBlock: View {
                         let delta = value.translation.width / pps * origin.speed
                         doc.trim(origin.id, leading: leading, to: (leading ? origin.start : origin.end) + delta)
                     }
-                    .onEnded { _ in
-                        trimOrigin = nil
-                        doc.endInteraction()
-                    }
+                    .onEnded { _ in finishTrim() }
             )
             .help(leading ? "Drag to trim the start" : "Drag to trim the end")
     }
@@ -283,8 +292,15 @@ private struct ZoomBlock: View {
     }
 
     @State private var origin: Origin?
+    @GestureState private var isDragging = false
 
     private var isSelected: Bool { doc.selection == .zoom(zoom.id) }
+
+    private func finishDrag() {
+        guard origin != nil else { return }
+        origin = nil
+        doc.endInteraction()
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -325,6 +341,9 @@ private struct ZoomBlock: View {
                     })
                 }
         }
+        .onChange(of: isDragging) { _, dragging in
+            if !dragging { finishDrag() }
+        }
     }
 
     private var edge: some View {
@@ -345,6 +364,7 @@ private struct ZoomBlock: View {
     /// A drag that hands `change` the zoom as it was when the drag began and the distance moved, in seconds.
     private func drag(_ change: @escaping (Origin, Double) -> Void) -> some Gesture {
         DragGesture(minimumDistance: 2, coordinateSpace: .global)
+            .updating($isDragging) { _, state, _ in state = true }
             .onChanged { value in
                 if origin == nil {
                     origin = Origin(start: zoom.start, end: zoom.end, outputStart: outputStart, outputEnd: outputEnd)
@@ -354,9 +374,6 @@ private struct ZoomBlock: View {
                 guard let origin else { return }
                 change(origin, value.translation.width / pps)
             }
-            .onEnded { _ in
-                origin = nil
-                doc.endInteraction()
-            }
+            .onEnded { _ in finishDrag() }
     }
 }

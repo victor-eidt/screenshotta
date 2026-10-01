@@ -73,12 +73,19 @@ final class RecordingDocument: ObservableObject {
     @Published private(set) var canRedo = false
 
     private(set) var timeline: ClipTimeline
+    /// Kept alive on purpose: a track only weakly references its asset, and once the asset is gone
+    /// every new cut fails to build.
+    private let sourceAsset: AVURLAsset
     private let sourceTrack: AVAssetTrack
     private let trackDuration: Double
     private let sourceSize: CGSize
     private let renderer: RecordingRenderer
-    private var composition: AVMutableComposition?
+    /// The cut last built, and the cut the player is showing (they differ while a new item is on its way).
+    private var composition: (segments: [ClipSegment], asset: AVMutableComposition)?
+    private var playerSegments: [ClipSegment]?
     private var customBackground: (path: String, image: CGImage?)?
+    private let firstFrame: CGImage?
+    private var chromeColors: (trim: Double, bar: CGColor, fill: CGColor)?
     private var motionKey: String?
     private var motion = MotionTrack.empty
 
@@ -102,34 +109,51 @@ final class RecordingDocument: ObservableObject {
         let size = try await track.load(.naturalSize)
         let duration = try await asset.load(.duration).seconds
         let cursor = project.loadCursor()
-        let edits = project.loadEdits() ?? .initial(duration: duration, clicks: cursor.clicks, style: .lastUsed)
+        var edits = project.loadEdits() ?? .initial(duration: duration, clicks: cursor.clicks, style: .lastUsed)
         let wallpaper = CGImageSourceCreateWithURL(project.wallpaperURL as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+
+        // Window recordings get a minimal title bar: the first frame shows how tall the app's own top bar is,
+        // and what color sits under it.
+        var firstFrame: CGImage?
+        if metadata.source == .window {
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 10)
+            firstFrame = try? await generator.image(at: .zero).image
+            if edits.windowTopTrim == nil {
+                let center = firstFrame.flatMap { TrafficLights.closeButtonCenter(in: $0, scale: metadata.scale) }
+                // The lights sit in the middle of the bar they belong to.
+                edits.windowTopTrim = center.map { ($0.y / metadata.scale * 2).rounded() } ?? 0
+            }
+        }
         return RecordingDocument(
-            project: project, metadata: metadata, cursor: cursor, edits: edits, track: track,
-            trackDuration: duration, sourceSize: size, wallpaper: wallpaper
+            project: project, metadata: metadata, cursor: cursor, edits: edits, asset: asset, track: track,
+            trackDuration: duration, sourceSize: size, wallpaper: wallpaper, firstFrame: firstFrame
         )
     }
 
     private init(
         project: RecordingProject, metadata: RecordingMetadata, cursor: CursorRecording, edits: RecordingEdits,
-        track: AVAssetTrack, trackDuration: Double, sourceSize: CGSize, wallpaper: CGImage?
+        asset: AVURLAsset, track: AVAssetTrack, trackDuration: Double, sourceSize: CGSize, wallpaper: CGImage?, firstFrame: CGImage?
     ) {
+        self.firstFrame = firstFrame
         self.project = project
         self.metadata = metadata
         self.cursor = cursor
         self.edits = edits
         self.wallpaper = wallpaper
+        sourceAsset = asset
         sourceTrack = track
         self.trackDuration = trackDuration
         self.sourceSize = sourceSize
         timeline = ClipTimeline(edits.segments)
         renderer = RecordingRenderer(scene: RenderScene(
-            style: edits.style, motion: .empty, timeline: timeline, pointSize: metadata.pointSize,
+            style: edits.style, motion: .empty, pointSize: metadata.pointSize,
             sourceSize: sourceSize, wallpaper: wallpaper, customBackground: nil
         ))
         player.actionAtItemEnd = .pause
         observePlayer()
-        refresh(rebuildComposition: true)
+        refresh()
     }
 
     var duration: Double { timeline.duration }
@@ -205,11 +229,8 @@ final class RecordingDocument: ObservableObject {
     func endInteraction() {
         guard isInteracting else { return }
         isInteracting = false
-        refresh(rebuildComposition: composition == nil || timelineChangedDuringInteraction)
-        timelineChangedDuringInteraction = false
+        refresh()
     }
-
-    private var timelineChangedDuringInteraction = false
 
     private func checkpoint() {
         undoStack.append(edits)
@@ -248,14 +269,7 @@ final class RecordingDocument: ObservableObject {
             currentTime = min(timeline.outputTime(atSource: source), duration)
         }
         if let selection, !isSelectionValid(selection) { self.selection = nil }
-
-        if isInteracting {
-            timelineChangedDuringInteraction = timelineChangedDuringInteraction || segmentsChanged
-            // The player keeps the old cut until the drag ends; only the look updates live.
-            if !segmentsChanged { refresh(rebuildComposition: false) }
-        } else {
-            refresh(rebuildComposition: segmentsChanged)
-        }
+        refresh()
         scheduleSave()
     }
 
@@ -284,17 +298,69 @@ final class RecordingDocument: ObservableObject {
 
     private func currentScene() -> RenderScene {
         let style = edits.style
+        let frame = recordingFrame
+        let geometry = cameraGeometry(frame)
         let key = [
-            "\(edits.zooms)", "\(style.smoothCursor)", "\(style.hideIdleCursor)",
+            "\(edits.zooms)", "\(style.smoothCursor)", "\(style.hideIdleCursor)", "\(geometry)",
         ].joined(separator: "|")
         if key != motionKey {
             motionKey = key
-            motion = MotionTrack(recording: cursor, pointSize: metadata.pointSize, duration: trackDuration, zooms: edits.zooms, style: style)
+            motion = MotionTrack(
+                recording: cursor, pointSize: metadata.pointSize, duration: trackDuration,
+                zooms: edits.zooms, style: style, geometry: geometry
+            )
         }
         return RenderScene(
-            style: style, motion: motion, timeline: timeline, pointSize: metadata.pointSize,
-            sourceSize: sourceSize, wallpaper: wallpaper, customBackground: loadCustomBackground(style.background)
+            style: style, motion: motion, pointSize: metadata.pointSize,
+            sourceSize: sourceSize, wallpaper: wallpaper, customBackground: loadCustomBackground(style.background),
+            frame: frame
         )
+    }
+
+    /// How the camera's view maps onto the framed recording.
+    private func cameraGeometry(_ frame: RecordingFrame?) -> CameraGeometry {
+        let content = frame?.size(of: sourceSize) ?? sourceSize
+        let canvas = RecordingRenderer.canvasSize(style: edits.style, sourceSize: content)
+        return CameraGeometry(
+            viewHalf: CGSize(width: canvas.width / content.width / 2, height: canvas.height / content.height / 2),
+            scale: CGSize(width: sourceSize.width / content.width, height: sourceSize.height / content.height),
+            offset: CGPoint(x: -(frame?.left ?? 0) / content.width, y: ((frame?.bar ?? 0) - (frame?.top ?? 0)) / content.height),
+            aspect: content.height / content.width
+        )
+    }
+
+    var isWindowRecording: Bool { metadata.source == .window }
+
+    /// The most that can be cut from each side, in points.
+    var maximumSideCut: Double { (metadata.pointSize.width * 0.4).rounded() }
+
+    /// The cuts at the edges, plus the minimal title bar for window recordings (its colors come from the first frame).
+    private var recordingFrame: RecordingFrame? {
+        let scale = metadata.scale
+        let left = (min(edits.cutLeft ?? 0, maximumSideCut) * scale).rounded()
+        let right = (min(edits.cutRight ?? 0, maximumSideCut) * scale).rounded()
+        var frame = RecordingFrame(left: left, right: right, scale: scale)
+
+        if isWindowRecording, edits.style.minimalWindowFrame, let image = firstFrame {
+            let trim = edits.windowTopTrim ?? 0
+            if chromeColors?.trim != trim {
+                let below = Int((trim + 2) * scale)
+                let bar = WindowChromeArt.dominantColor(of: image, row: below) ?? CGColor(gray: 0.93, alpha: 1)
+                let fill = WindowChromeArt.dominantColor(of: image, row: image.height - Int(4 * scale)) ?? bar
+                chromeColors = (trim, bar, fill)
+            }
+            frame.top = (trim * scale).rounded()
+            frame.bar = (RecordingFrame.barHeight * scale).rounded()
+            frame.barColor = chromeColors?.bar
+            frame.fillColor = chromeColors?.fill
+        }
+        guard frame.left > 0 || frame.right > 0 || frame.bar > 0 else { return nil }
+        return frame
+    }
+
+    /// The recording's size as framed (in video pixels).
+    private var contentSize: CGSize {
+        recordingFrame?.size(of: sourceSize) ?? sourceSize
     }
 
     private func loadCustomBackground(_ background: RecordingBackground) -> CGImage? {
@@ -306,40 +372,42 @@ final class RecordingDocument: ObservableObject {
     }
 
     var previewSize: CGSize {
-        let canvas = RecordingRenderer.canvasSize(style: edits.style, sourceSize: sourceSize)
+        let canvas = RecordingRenderer.canvasSize(style: edits.style, sourceSize: contentSize)
         return RecordingRenderer.outputSize(canvas: canvas, longSide: Self.previewLongSide)
     }
 
     func exportPixelSize(_ size: ExportSize) -> CGSize {
-        let canvas = RecordingRenderer.canvasSize(style: edits.style, sourceSize: sourceSize)
+        let canvas = RecordingRenderer.canvasSize(style: edits.style, sourceSize: contentSize)
         return RecordingRenderer.outputSize(canvas: canvas, longSide: CGFloat(size.rawValue))
     }
 
-    /// Pushes the edits to the renderer and the player. A new video composition makes the player
-    /// redraw even while paused; a new cut needs a new player item.
-    private func refresh(rebuildComposition: Bool) {
+    /// Pushes the edits to the renderer and the player. A new video composition makes the player redraw
+    /// even while paused; a new cut needs a new player item. While a clip is being dragged the player keeps
+    /// the cut it has, and catches up when the drag ends. Each video composition carries the cut it was
+    /// made for, so the pointer and camera always match the frames on screen.
+    private func refresh() {
         renderer.update(currentScene())
         refreshGeneration += 1
         let generation = refreshGeneration
         let renderSize = previewSize
 
-        if rebuildComposition || composition == nil {
-            do {
-                composition = try RecordingComposition.make(track: sourceTrack, trackDuration: trackDuration, segments: edits.segments)
-            } catch {
-                return
-            }
+        let segments = isInteracting ? (playerSegments ?? edits.segments) : edits.segments
+        if composition?.segments != segments {
+            guard let asset = try? RecordingComposition.make(track: sourceTrack, trackDuration: trackDuration, segments: segments) else { return }
+            composition = (segments, asset)
         }
         guard let composition else { return }
-        let needsItem = rebuildComposition || player.currentItem == nil
+        let needsItem = playerSegments != composition.segments || player.currentItem == nil
         Task {
-            guard let videoComposition = try? await RecordingComposition.videoComposition(for: composition, renderer: renderer, renderSize: renderSize),
-                  generation == refreshGeneration
+            guard let videoComposition = try? await RecordingComposition.videoComposition(
+                for: composition.asset, timeline: ClipTimeline(composition.segments), renderer: renderer, renderSize: renderSize
+            ), generation == refreshGeneration
             else { return }
             if needsItem {
-                let item = AVPlayerItem(asset: composition)
+                let item = AVPlayerItem(asset: composition.asset)
                 item.videoComposition = videoComposition
                 player.replaceCurrentItem(with: item)
+                playerSegments = composition.segments
             } else {
                 player.currentItem?.videoComposition = videoComposition
             }
@@ -468,7 +536,7 @@ final class RecordingDocument: ObservableObject {
     // MARK: - Export
 
     func startExport() {
-        guard let composition, !isExporting else { return }
+        guard !isInteracting, let composition, !isExporting else { return }
         player.pause()
         let size = exportPixelSize(exportSize)
         let url = Self.exportURL(named: metadata.title)
@@ -477,8 +545,10 @@ final class RecordingDocument: ObservableObject {
         export = .exporting(0)
         Task {
             do {
-                let videoComposition = try await RecordingComposition.videoComposition(for: composition, renderer: exportRenderer, renderSize: size)
-                try await RecordingComposition.export(composition, videoComposition: videoComposition, to: url) { progress in
+                let videoComposition = try await RecordingComposition.videoComposition(
+                    for: composition.asset, timeline: ClipTimeline(composition.segments), renderer: exportRenderer, renderSize: size
+                )
+                try await RecordingComposition.export(composition.asset, videoComposition: videoComposition, to: url) { progress in
                     Task { @MainActor in
                         guard case .exporting = self.export else { return }
                         self.export = .exporting(progress)

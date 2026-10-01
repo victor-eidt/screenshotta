@@ -3,10 +3,10 @@ import Foundation
 
 /// Finds the moments worth zooming into: clusters of clicks.
 nonisolated enum AutoZoom {
-    /// Zoom starts this long before the first click of a cluster, so it has arrived by the click.
-    private static let lead = 0.8
-    /// And holds this long after the last one.
-    private static let tail = 1.8
+    /// Zoom starts this long before the first click of a cluster, so it has fully arrived by the click.
+    private static let lead = MotionTrack.zoomInDuration + 0.2
+    /// And holds this long after the last one, before easing out.
+    private static let tail = 1.5
     /// Clicks closer together than this share one zoom.
     private static let clusterGap = 2.6
     private static let minimumLength = 2.4
@@ -39,7 +39,23 @@ nonisolated enum AutoZoom {
     }
 }
 
-/// Where the camera looks: a zoom factor and the focus point (normalized, top-left origin).
+/// How the output view relates to the recording as framed (cut, and with a new title bar).
+nonisolated struct CameraGeometry: Sendable, Equatable {
+    /// Half the full output view, in units of the framed recording: above 0.5 where there's padding.
+    var viewHalf = CGSize(width: 0.5, height: 0.5)
+    /// Recording (normalized) to framed recording (normalized): `x * scale.width + offset.x`, and so on.
+    var scale = CGSize(width: 1, height: 1)
+    var offset = CGPoint.zero
+    /// The framed recording's height over its width, so distances count the same both ways.
+    var aspect: CGFloat = 1
+
+    func framed(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: p.x * scale.width + offset.x, y: p.y * scale.height + offset.y)
+    }
+}
+
+/// Where the camera looks: a zoom factor and the center of the view, in the framed recording
+/// (normalized, top-left origin).
 nonisolated struct CameraState: Sendable {
     var scale: Double
     var x: Double
@@ -56,10 +72,13 @@ nonisolated struct CursorState: Sendable {
     var opacity: Double
 }
 
-/// Pointer and camera paths, simulated once over the whole recording so any frame can be looked up
-/// directly: playback, scrubbing and export all see exactly the same motion.
+/// Pointer and camera paths, worked out once over the whole recording so any frame can be looked up
+/// directly: playback, scrubbing and export all see exactly the same motion. Knowing the whole recording
+/// lets the smoothing look ahead, so the camera and pointer glide without trailing behind.
 nonisolated struct MotionTrack: Sendable {
     static let rate = 60.0
+    static let zoomInDuration = 0.85
+    static let zoomOutDuration = 0.9
 
     let clicks: [CursorRecording.Sample]
     private let cursor: [CGPoint]
@@ -75,18 +94,17 @@ nonisolated struct MotionTrack: Sendable {
         self.camera = camera
     }
 
-    init(recording: CursorRecording, pointSize: CGSize, duration: Double, zooms: [ZoomSegment], style: RecordingStyle) {
+    init(recording: CursorRecording, pointSize: CGSize, duration: Double, zooms: [ZoomSegment], style: RecordingStyle, geometry: CameraGeometry = CameraGeometry()) {
         let count = max(2, Int((duration * Self.rate).rounded(.up)) + 2)
         let w = max(pointSize.width, 1)
         let h = max(pointSize.height, 1)
         let samples = recording.samples.map { CursorRecording.Sample(t: $0.t, x: $0.x / w, y: $0.y / h) }
         let raw = Self.resample(samples, count: count)
-        let cursor = style.smoothCursor ? Self.smooth(raw) : raw
 
         clicks = recording.clicks.map { CursorRecording.Sample(t: $0.t, x: $0.x / w, y: $0.y / h) }
-        self.cursor = cursor
+        cursor = style.smoothCursor ? Self.smooth(raw, sigma: 0.09) : raw
         opacity = Self.visibility(raw: raw, hasSamples: !samples.isEmpty, hideIdle: style.hideIdleCursor)
-        camera = Self.simulateCamera(cursor: cursor, zooms: zooms.sorted { $0.start < $1.start })
+        camera = Self.camera(pointer: raw.map(geometry.framed), zooms: zooms.sorted { $0.start < $1.start }, geometry: geometry)
     }
 
     // MARK: - Lookup
@@ -116,7 +134,7 @@ nonisolated struct MotionTrack: Sendable {
         return (i, position - Double(i))
     }
 
-    // MARK: - Building
+    // MARK: - Pointer
 
     /// The raw pointer at a fixed rate, interpolated between samples.
     private static func resample(_ samples: [CursorRecording.Sample], count: Int) -> [CGPoint] {
@@ -139,27 +157,22 @@ nonisolated struct MotionTrack: Sendable {
         return result
     }
 
-    /// A slightly underdamped spring chasing the real pointer: removes the jitter and makes
-    /// every movement glide, while still landing where the pointer actually stopped.
-    private static func smooth(_ raw: [CGPoint]) -> [CGPoint] {
-        guard var position = raw.first else { return raw }
-        var velocity = CGVector.zero
-        let omega = 15.0, zeta = 0.86, substeps = 4
-        let dt = 1 / rate / Double(substeps)
-        var result: [CGPoint] = []
-        result.reserveCapacity(raw.count)
-        for target in raw {
-            for _ in 0..<substeps {
-                let ax = omega * omega * (target.x - position.x) - 2 * zeta * omega * velocity.dx
-                let ay = omega * omega * (target.y - position.y) - 2 * zeta * omega * velocity.dy
-                velocity.dx += ax * dt
-                velocity.dy += ay * dt
-                position.x += velocity.dx * dt
-                position.y += velocity.dy * dt
+    /// A centered Gaussian: it looks as far ahead as it looks back, so the path is smoothed without any delay.
+    private static func smooth(_ points: [CGPoint], sigma: Double) -> [CGPoint] {
+        let radius = Int((sigma * 3 * rate).rounded(.up))
+        guard radius > 0, points.count > 1 else { return points }
+        let weights = (-radius...radius).map { k in exp(-0.5 * pow(Double(k) / (sigma * rate), 2)) }
+        return points.indices.map { i in
+            var x = 0.0, y = 0.0, total = 0.0
+            for (offset, weight) in zip(-radius...radius, weights) {
+                let j = i + offset
+                guard j >= 0, j < points.count else { continue }
+                x += points[j].x * weight
+                y += points[j].y * weight
+                total += weight
             }
-            result.append(position)
+            return CGPoint(x: x / total, y: y / total)
         }
-        return result
     }
 
     private static func visibility(raw: [CGPoint], hasSamples: Bool, hideIdle: Bool) -> [Double] {
@@ -178,49 +191,111 @@ nonisolated struct MotionTrack: Sendable {
         }
     }
 
-    /// Critically damped springs on zoom (in log space, so zooming feels even) and on the focus point.
-    /// While zoomed, the focus only moves once the pointer nears the edge of the view.
-    private static func simulateCamera(cursor: [CGPoint], zooms: [ZoomSegment]) -> [CameraState] {
-        var logScale = 0.0, scaleVelocity = 0.0
-        var focus = CGPoint(x: 0.5, y: 0.5), focusVelocity = CGVector.zero
-        var target = focus
-        var activeZoom: UUID?
-        let scaleOmega = 6.2, focusOmega = 5.0, substeps = 4
-        let dt = 1 / rate / Double(substeps)
-        var zoomIndex = 0
+    // MARK: - Camera
 
-        var result: [CameraState] = []
-        result.reserveCapacity(cursor.count)
-        for (i, pointer) in cursor.enumerated() {
-            let t = Double(i) / rate
-            while zoomIndex < zooms.count, zooms[zoomIndex].end <= t { zoomIndex += 1 }
-            let zoom = zoomIndex < zooms.count && zooms[zoomIndex].start <= t ? zooms[zoomIndex] : nil
+    /// Zoom eases in on a fixed curve, so it arrives on time, and eases back out after the zoom ends.
+    /// Zooms close together are bridged: the camera stays in and pans instead of bouncing out and back.
+    ///
+    /// While zoomed, the camera holds still as long as the pointer stays near the middle, follows it in the
+    /// direction it moves once it heads away, and is smoothed looking both ways, so it moves with the pointer
+    /// rather than after it. Zooming in and out travels in one straight line: the view scales around the one
+    /// point that stays put on screen, so it never needs nudging back inside the edges halfway.
+    private static func camera(pointer: [CGPoint], zooms: [ZoomSegment], geometry: CameraGeometry) -> [CameraState] {
+        let count = pointer.count
+        let frames = { (t: Double) in min(max(Int((t * rate).rounded()), 0), count) }
 
-            let targetScale = zoom?.scale ?? 1
-            if let zoom {
-                let half = 0.5 / targetScale
-                if activeZoom != zoom.id { target = pointer }
-                let margin = half * 0.5
-                target.x = min(max(target.x, pointer.x - margin), pointer.x + margin)
-                target.y = min(max(target.y, pointer.y - margin), pointer.y + margin)
-                target.x = min(max(target.x, half), 1 - half)
-                target.y = min(max(target.y, half), 1 - half)
-            } else {
-                target = CGPoint(x: 0.5, y: 0.5)
-            }
-            activeZoom = zoom?.id
-
-            let targetLog = log(targetScale)
-            for _ in 0..<substeps {
-                scaleVelocity += (scaleOmega * scaleOmega * (targetLog - logScale) - 2 * scaleOmega * scaleVelocity) * dt
-                logScale += scaleVelocity * dt
-                focusVelocity.dx += (focusOmega * focusOmega * (target.x - focus.x) - 2 * focusOmega * focusVelocity.dx) * dt
-                focusVelocity.dy += (focusOmega * focusOmega * (target.y - focus.y) - 2 * focusOmega * focusVelocity.dy) * dt
-                focus.x += focusVelocity.dx * dt
-                focus.y += focusVelocity.dy * dt
-            }
-            result.append(CameraState(scale: max(1, exp(logScale)), x: focus.x, y: focus.y))
+        var bridged = zooms
+        for i in bridged.indices.dropLast() where bridged[i + 1].start - bridged[i].end < zoomOutDuration + 0.8 {
+            bridged[i].end = max(bridged[i].end, bridged[i + 1].start + zoomInDuration)
         }
-        return result
+
+        // How far in (as log(scale)), and how far in the current run of bridged zooms goes at most.
+        var logScale = [Double](repeating: 0, count: count)
+        var heldScale = [Double](repeating: 1, count: count)
+        for zoom in bridged {
+            let target = log(max(zoom.scale, 1))
+            for i in frames(zoom.start)..<frames(zoom.end + zoomOutDuration) {
+                let t = Double(i) / rate
+                let zoomIn = ease((t - zoom.start) / zoomInDuration)
+                let zoomOut = 1 - ease((t - zoom.end) / zoomOutDuration)
+                logScale[i] = max(logScale[i], target * min(zoomIn, zoomOut))
+            }
+        }
+        var group = 0
+        while group < bridged.count {
+            var last = group
+            var top = bridged[group].scale
+            var end = bridged[group].end
+            while last + 1 < bridged.count, bridged[last + 1].start <= end {
+                last += 1
+                top = max(top, bridged[last].scale)
+                end = max(end, bridged[last].end)
+            }
+            for i in frames(bridged[group].start)..<frames(end + zoomOutDuration) {
+                heldScale[i] = max(heldScale[i], top)
+            }
+            group = last + 1
+        }
+
+        // Zooms that start from the full view land centered on the pointer; until then the camera aims there.
+        var arrivals: [(first: Int, arrival: Int)] = []
+        for zoom in zooms {
+            let first = frames(zoom.start)
+            let arrival = min(frames(zoom.start + zoomInDuration), count - 1)
+            if first < arrival, logScale[first] < 0.05 { arrivals.append((first, arrival)) }
+        }
+        let landings = Set(arrivals.map(\.arrival))
+
+        // Where to look: the pointer, with a round dead zone around the current focus.
+        let aspect = Double(geometry.aspect)
+        var targets: [CGPoint] = []
+        targets.reserveCapacity(count)
+        var anchor = pointer.first ?? CGPoint(x: 0.5, y: 0.5)
+        for (i, p) in pointer.enumerated() {
+            if landings.contains(i) {
+                anchor = p
+            } else {
+                let radius = 0.17 / heldScale[i]
+                let dx = p.x - anchor.x, dy = (p.y - anchor.y) * aspect
+                let distance = hypot(dx, dy)
+                if distance > radius {
+                    let k = (distance - radius) / distance
+                    anchor.x += dx * k
+                    anchor.y += dy * k / aspect
+                }
+            }
+            targets.append(anchor)
+        }
+        for (first, arrival) in arrivals {
+            for i in first..<arrival { targets[i] = targets[arrival] }
+        }
+
+        // Kept inside the recording at full zoom before smoothing, so reaching an edge or a corner
+        // rounds off into the same motion instead of stopping one direction first.
+        func inside(_ v: Double, half: Double) -> Double {
+            half < 0.5 ? min(max(v, half), 1 - half) : 0.5
+        }
+        let held = targets.indices.map { i in
+            CGPoint(
+                x: inside(targets[i].x, half: geometry.viewHalf.width / heldScale[i]),
+                y: inside(targets[i].y, half: geometry.viewHalf.height / heldScale[i])
+            )
+        }
+        let focus = smooth(held, sigma: 0.32)
+
+        return (0..<count).map { i in
+            let scale = exp(logScale[i])
+            let top = heldScale[i]
+            guard top > 1.0001 else { return .identity }
+            // Straight from the full view to the zoomed view, in step with the view's size.
+            let progress = min(max((1 - 1 / scale) / (1 - 1 / top), 0), 1)
+            return CameraState(scale: scale, x: 0.5 + (focus[i].x - 0.5) * progress, y: 0.5 + (focus[i].y - 0.5) * progress)
+        }
+    }
+
+    /// Ease in and out (cubic), clamped to 0...1.
+    private static func ease(_ x: Double) -> Double {
+        let t = min(max(x, 0), 1)
+        return t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2
     }
 }

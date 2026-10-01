@@ -72,6 +72,42 @@ private struct BackgroundPanel: View {
     var body: some View {
         let style = doc.edits.style
         VStack(alignment: .leading, spacing: 22) {
+            if doc.isWindowRecording {
+                InspectorToggle(
+                    title: "Minimal title bar",
+                    detail: "Swaps the app's own top bar for a thin, plain one with just the traffic lights, so every window looks alike.",
+                    isOn: doc.style(\.minimalWindowFrame)
+                )
+            }
+            InspectorSection("Cut") {
+                VStack(alignment: .leading, spacing: 14) {
+                    if doc.isWindowRecording {
+                        InspectorSlider(
+                            title: "Top",
+                            value: Binding(get: { doc.edits.windowTopTrim ?? 0 }, set: { value in doc.update { $0.windowTopTrim = value.rounded() } }),
+                            range: 0...160,
+                            format: { "\(Int($0)) pt" },
+                            onEditing: doc.sliderEditing
+                        )
+                        .disabled(!style.minimalWindowFrame)
+                    }
+                    InspectorSlider(
+                        title: "Left",
+                        value: Binding(get: { doc.edits.cutLeft ?? 0 }, set: { value in doc.update { $0.cutLeft = value.rounded() } }),
+                        range: 0...doc.maximumSideCut,
+                        format: { "\(Int($0)) pt" },
+                        onEditing: doc.sliderEditing
+                    )
+                    InspectorSlider(
+                        title: "Right",
+                        value: Binding(get: { doc.edits.cutRight ?? 0 }, set: { value in doc.update { $0.cutRight = value.rounded() } }),
+                        range: 0...doc.maximumSideCut,
+                        format: { "\(Int($0)) pt" },
+                        onEditing: doc.sliderEditing
+                    )
+                }
+            }
+
             InspectorSection("Wallpaper & Gradients") {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
                     if let wallpaper = doc.wallpaper {

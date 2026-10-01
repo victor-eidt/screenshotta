@@ -28,26 +28,11 @@ enum TrafficLights {
 
     /// Returns a recolored copy, or nil when there are no gray traffic lights to fix.
     static func colorize(_ image: CGImage, scale: CGFloat) -> CGImage? {
-        let width = image.width
-        let height = image.height
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(
-                  data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-              ),
-              let data = ctx.data
+        guard let bitmap = Bitmap(image),
+              let lights = findLights(scale: Double(scale), width: bitmap.width, height: bitmap.height, anyColor: false, pixel: bitmap.pixel)
         else { return nil }
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let bytes = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
-
-        // Row 0 of the bitmap is the top of the image.
-        func pixel(_ x: Int, _ y: Int) -> Pixel? {
-            guard x >= 0, y >= 0, x < width, y < height else { return nil }
-            let i = (y * width + x) * 4
-            return Pixel(r: Int(bytes[i]), g: Int(bytes[i + 1]), b: Int(bytes[i + 2]), a: Int(bytes[i + 3]))
-        }
-
-        guard let lights = findLights(scale: Double(scale), width: width, height: height, pixel: pixel) else { return nil }
+        let ctx = bitmap.context
+        let height = bitmap.height
 
         for (circle, color) in zip(lights, colors) {
             let r = circle.radius + 0.75
@@ -61,7 +46,56 @@ enum TrafficLights {
         return ctx.makeImage()
     }
 
-    private static func findLights(scale s: Double, width: Int, height: Int, pixel: (Int, Int) -> Pixel?) -> [Circle]? {
+    /// Where the traffic lights sit, active (colored) or not: the center of the close button,
+    /// in pixels from the image's top-left corner.
+    static func closeButtonCenter(in image: CGImage, scale: CGFloat) -> CGPoint? {
+        guard let bitmap = Bitmap(image),
+              let lights = findLights(scale: Double(scale), width: bitmap.width, height: bitmap.height, anyColor: true, pixel: bitmap.pixel)
+        else { return nil }
+        return CGPoint(x: lights[0].x, y: lights.map(\.y).reduce(0, +) / 3)
+    }
+
+    /// The image drawn into an RGBA buffer whose row 0 is the top of the image.
+    private struct Bitmap {
+        let context: CGContext
+        let width: Int
+        let height: Int
+        private let bytes: UnsafeMutablePointer<UInt8>
+
+        init?(_ image: CGImage) {
+            width = image.width
+            height = image.height
+            guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let ctx = CGContext(
+                      data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ),
+                  let data = ctx.data
+            else { return nil }
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            context = ctx
+            bytes = data.bindMemory(to: UInt8.self, capacity: width * height * 4)
+        }
+
+        func pixel(_ x: Int, _ y: Int) -> Pixel? {
+            guard x >= 0, y >= 0, x < width, y < height else { return nil }
+            let i = (y * width + x) * 4
+            return Pixel(r: Int(bytes[i]), g: Int(bytes[i + 1]), b: Int(bytes[i + 2]), a: Int(bytes[i + 3]))
+        }
+    }
+
+    /// Three matching grays (an inactive window), or with `anyColor` also red, yellow and green.
+    private static func looksLikeLights(_ a: Pixel, _ b: Pixel, _ c: Pixel, anyColor: Bool) -> Bool {
+        let gray = a.saturation <= 24 && b.distance(to: a) <= 16 && c.distance(to: a) <= 16
+        guard anyColor, !gray else { return gray }
+        let red = a.r > a.g + 60 && a.r > a.b + 60
+        let yellow = b.r > b.b + 80 && b.g > b.b + 50 && b.r >= b.g
+        let green = c.g > c.r + 40 && c.g > c.b + 40
+        return red && yellow && green
+    }
+
+    /// `anyColor` also finds active (red, yellow, green) lights; otherwise only the gray inactive ones.
+    private static func findLights(scale s: Double, width: Int, height: Int, anyColor: Bool, pixel: (Int, Int) -> Pixel?) -> [Circle]? {
         let minRadius = 4.5 * s
         let maxRadius = 8.0 * s
         let maxWalk = Int(maxRadius * 1.4)
@@ -81,7 +115,7 @@ enum TrafficLights {
         let region = (x: Int(4 * s)..<min(width, Int(100 * s)), y: Int(4 * s)..<min(height, Int(72 * s)))
         for y in region.y {
             for x in region.x {
-                guard let fill = pixel(x, y), fill.a == 255, fill.saturation <= 24,
+                guard let fill = pixel(x, y), fill.a >= 240, anyColor || fill.saturation <= 24,
                       let right = walk(x, y, 1, 0, fill), let left = walk(x, y, -1, 0, fill),
                       abs(right - left) <= 1,
                       let down = walk(x, y, 0, 1, fill), let up = walk(x, y, 0, -1, fill),
@@ -124,11 +158,11 @@ enum TrafficLights {
             for b in circles where b.x > a.x {
                 let spacing = b.x - a.x
                 guard spacing >= 15 * s, spacing <= 27 * s,
-                      abs(b.y - a.y) <= 2, abs(b.radius - a.radius) <= 1.5, b.color.distance(to: a.color) <= 16
+                      abs(b.y - a.y) <= 2, abs(b.radius - a.radius) <= 1.5
                 else { continue }
                 if let c = circles.first(where: {
                     abs($0.x - (b.x + spacing)) <= 2.5 && abs($0.y - a.y) <= 2
-                        && abs($0.radius - a.radius) <= 1.5 && $0.color.distance(to: a.color) <= 16
+                        && abs($0.radius - a.radius) <= 1.5 && looksLikeLights(a.color, b.color, $0.color, anyColor: anyColor)
                 }) {
                     return [a, b, c]
                 }
