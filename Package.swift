@@ -13,5 +13,14 @@ let package = Package(
                 .swiftLanguageMode(.v5),
             ]
         ),
+        .testTarget(
+            name: "ScreenOtterTests",
+            dependencies: ["ScreenOtter"],
+            path: "Tests/ScreenOtterTests",
+            swiftSettings: [
+                .defaultIsolation(MainActor.self),
+                .swiftLanguageMode(.v5),
+            ]
+        ),
     ]
 )
