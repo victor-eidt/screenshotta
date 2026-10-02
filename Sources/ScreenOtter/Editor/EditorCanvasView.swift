@@ -225,7 +225,7 @@ final class EditorCanvasView: NSView {
         default:
             guard let kind = doc.tool.annotationKind else { return }
             doc.selectedID = nil
-            drag = .drawing(Annotation(kind: kind, start: p, end: p, points: [p], color: doc.color, width: doc.stroke.points * doc.scale))
+            drag = .drawing(Annotation(kind: kind, start: p, end: p, points: [p], style: doc.style, scale: doc.scale))
         }
         needsDisplay = true
     }
@@ -327,9 +327,11 @@ final class EditorCanvasView: NSView {
         case kVK_Escape:
             if doc.tool == .crop { doc.cancelCrop() } else { doc.selectedID = nil }
         default:
-            if flags.isEmpty, let character = event.charactersIgnoringModifiers?.lowercased().first,
-               let tool = EditorTool.allCases.first(where: { $0.shortcutKey == character }) {
+            let character = flags.isEmpty ? event.charactersIgnoringModifiers?.lowercased().first : nil
+            if let character, let tool = EditorTool.allCases.first(where: { $0.shortcutKey == character }) {
                 doc.tool = tool
+            } else if let character, let swatch = AnnotationPalette.swatch(forKey: character) {
+                doc.updateStyle { $0.color = swatch.color }
             } else {
                 super.keyDown(with: event)
             }

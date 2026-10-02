@@ -112,12 +112,16 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         // Closing means "done": edits go to the file and the clipboard.
         doc.applyCrop()
         if doc.isDirty { doc.commit() }
+        StyleColorPanel.shared.detach(from: doc)
         Self.openEditors.removeAll { $0 === self }
         AppActivation.windowClosed()
     }
 
     func windowDidResize(_ notification: Notification) { positionTrafficLights() }
-    func windowDidBecomeKey(_ notification: Notification) { positionTrafficLights() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        positionTrafficLights()
+        StyleColorPanel.shared.follow(doc)
+    }
     func windowDidExitFullScreen(_ notification: Notification) { positionTrafficLights() }
 
     func positionTrafficLights() {

@@ -55,34 +55,6 @@ enum EditorTool: String, CaseIterable, Identifiable {
     }
 }
 
-enum StrokeSize: CaseIterable, Identifiable {
-    case thin, medium, thick
-
-    var id: Self { self }
-
-    /// Stroke width in points; multiplied by the image scale when drawing.
-    var points: CGFloat {
-        switch self {
-        case .thin: 3
-        case .medium: 5
-        case .thick: 8
-        }
-    }
-}
-
-enum AnnotationPalette {
-    static let colors: [NSColor] = [
-        NSColor(srgbRed: 1.00, green: 0.23, blue: 0.19, alpha: 1), // red
-        NSColor(srgbRed: 1.00, green: 0.62, blue: 0.04, alpha: 1), // orange
-        NSColor(srgbRed: 1.00, green: 0.84, blue: 0.04, alpha: 1), // yellow
-        NSColor(srgbRed: 0.20, green: 0.78, blue: 0.35, alpha: 1), // green
-        NSColor(srgbRed: 0.04, green: 0.52, blue: 1.00, alpha: 1), // blue
-        NSColor(srgbRed: 0.75, green: 0.35, blue: 0.95, alpha: 1), // purple
-        .white,
-        .black,
-    ]
-}
-
 /// A shape drawn on the screenshot. Coordinates are image pixels, top-left origin.
 struct Annotation: Identifiable, Equatable {
     enum Kind {
@@ -94,8 +66,13 @@ struct Annotation: Identifiable, Equatable {
     var start: CGPoint
     var end: CGPoint
     var points: [CGPoint] = []
-    var color: NSColor
-    var width: CGFloat
+    var style: AnnotationStyle
+    /// Image pixels per point, so the stroke weight keeps its visual size on Retina captures.
+    /// No default: a tool that forgot it would draw at half width on Retina.
+    var scale: CGFloat
+
+    /// Stroke width in image pixels.
+    var width: CGFloat { style.weight.points * scale }
 
     var rect: CGRect {
         CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
@@ -170,8 +147,8 @@ enum AnnotationRenderer {
             blur: a.width * 1.4 * unit,
             color: CGColor(gray: 0, alpha: 0.32)
         )
-        ctx.setStrokeColor(a.color.cgColor)
-        ctx.setFillColor(a.color.cgColor)
+        ctx.setStrokeColor(a.style.color.cgColor)
+        ctx.setFillColor(a.style.color.cgColor)
         ctx.setLineWidth(a.width)
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)

@@ -10,9 +10,14 @@ final class EditorDocument: ObservableObject {
     @Published private(set) var crop: CGRect
     /// The crop being edited while the crop tool is active.
     @Published var pendingCrop: CGRect?
-    @Published var selectedID: UUID?
-    @Published var color: NSColor = AnnotationPalette.colors[0]
-    @Published var stroke: StrokeSize = .medium
+    @Published var selectedID: UUID? {
+        didSet { if selectedID != oldValue { styleEditTarget = nil } }
+    }
+    /// The style new annotations get. Changing it with a selection restyles that annotation too.
+    /// It starts as the last used style and is saved back on every change.
+    @Published private(set) var style: AnnotationStyle {
+        didSet { if style != oldValue { style.rememberAsDefault(in: styleDefaults) } }
+    }
     @Published private(set) var isDirty = false
     /// Display zoom relative to the image's point size, reported by the canvas.
     @Published var zoom: CGFloat = 1
@@ -31,6 +36,10 @@ final class EditorDocument: ObservableObject {
         var crop: CGRect
     }
 
+    /// The annotation whose live style edit (color panel drag) already has an undo step.
+    private var styleEditTarget: UUID?
+    private let styleDefaults: UserDefaults
+
     @Published private var undoStack: [Snapshot] = []
     @Published private var redoStack: [Snapshot] = []
 
@@ -39,10 +48,13 @@ final class EditorDocument: ObservableObject {
 
     var imageBounds: CGRect { CGRect(x: 0, y: 0, width: image.width, height: image.height) }
 
-    init(capture: CapturedImage, fileURL: URL?) {
+    /// - Parameter defaults: where the last used style is read from and saved to (a suite in tests).
+    init(capture: CapturedImage, fileURL: URL?, defaults: UserDefaults = .standard) {
         image = capture.image
         scale = capture.scale
         self.fileURL = fileURL
+        styleDefaults = defaults
+        style = .lastUsed(in: defaults)
         crop = CGRect(x: 0, y: 0, width: capture.image.width, height: capture.image.height)
     }
 
@@ -50,6 +62,7 @@ final class EditorDocument: ObservableObject {
 
     /// Call before every change so it can be undone.
     func checkpoint() {
+        styleEditTarget = nil
         undoStack.append(Snapshot(annotations: annotations, crop: crop))
         redoStack.removeAll()
         isDirty = true
@@ -58,6 +71,34 @@ final class EditorDocument: ObservableObject {
     func add(_ annotation: Annotation) {
         checkpoint()
         annotations.append(annotation)
+    }
+
+    var selectedAnnotation: Annotation? {
+        selectedID.flatMap { id in annotations.first { $0.id == id } }
+    }
+
+    /// What the style picker shows: the selected annotation's style, otherwise the style for new ones.
+    var displayedStyle: AnnotationStyle { selectedAnnotation?.style ?? style }
+
+    /// Changes the style for new annotations and, when one is selected, that annotation (undoably).
+    /// Only the parts `change` touches are applied, so picking a color keeps the selection's own weight.
+    /// - Parameter coalescing: live edits (dragging in the color panel) share one undo step per annotation.
+    func updateStyle(coalescing: Bool = false, _ change: (inout AnnotationStyle) -> Void) {
+        change(&style)
+        guard let id = selectedID, let index = annotations.firstIndex(where: { $0.id == id }) else { return }
+        var restyled = annotations[index].style
+        change(&restyled)
+        guard restyled != annotations[index].style else { return }
+        if !(coalescing && styleEditTarget == id) {
+            checkpoint()
+            if coalescing { styleEditTarget = id }
+        }
+        annotations[index].style = restyled
+    }
+
+    /// Ends a run of coalesced style edits, so the next one gets its own undo step.
+    func endStyleCoalescing() {
+        styleEditTarget = nil
     }
 
     func deleteSelected() {
