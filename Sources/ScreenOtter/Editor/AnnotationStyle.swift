@@ -80,7 +80,7 @@ nonisolated struct StyleColor: Hashable, Sendable, Codable {
 }
 
 /// How heavy an annotation is. Each tool maps it to its own size: a line width for shapes,
-/// a font size for text (later a radius for blur), so one control drives them all.
+/// a font size for text, so one control drives them all. Redactions size themselves from their region.
 nonisolated enum StrokeWeight: String, CaseIterable, Identifiable, Codable, Sendable {
     case fine, regular, bold, heavy
 
@@ -124,6 +124,8 @@ nonisolated struct AnnotationStyle: Codable, Equatable, Sendable {
     /// switching tools keeps the last text look.
     var font: TextFont
     var label: TextLabelStyle
+    /// Redactions only: blur or pixelate. Kept with the rest so the last one used comes back.
+    var redaction: RedactionMode
 
     static let `default` = AnnotationStyle()
 
@@ -131,12 +133,14 @@ nonisolated struct AnnotationStyle: Codable, Equatable, Sendable {
         color: StyleColor = AnnotationPalette.swatches[0].color,
         weight: StrokeWeight = .regular,
         font: TextFont = .geist,
-        label: TextLabelStyle = .filled
+        label: TextLabelStyle = .filled,
+        redaction: RedactionMode = .blur
     ) {
         self.color = color
         self.weight = weight
         self.font = font
         self.label = label
+        self.redaction = redaction
     }
 
     // Decoding field by field keeps a saved style readable when fields are added, renamed or removed.
@@ -147,10 +151,11 @@ nonisolated struct AnnotationStyle: Codable, Equatable, Sendable {
         weight = (try? c.decode(StrokeWeight.self, forKey: .weight)) ?? d.weight
         font = (try? c.decode(TextFont.self, forKey: .font)) ?? d.font
         label = (try? c.decode(TextLabelStyle.self, forKey: .label)) ?? d.label
+        redaction = (try? c.decode(RedactionMode.self, forKey: .redaction)) ?? d.redaction
     }
 
     private enum CodingKeys: String, CodingKey {
-        case color, weight, font, label
+        case color, weight, font, label, redaction
     }
 
     private static let defaultsKey = "annotationStyle"

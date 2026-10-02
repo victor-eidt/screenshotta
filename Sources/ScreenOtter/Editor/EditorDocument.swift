@@ -28,8 +28,9 @@ final class EditorDocument: ObservableObject {
             endTextEditing()
             if oldValue == .crop { applyCrop() }
             if tool == .crop { pendingCrop = crop }
-            // The text tool keeps a selected label, so it can be restyled without switching tools.
-            if tool != .select && !(tool == .text && selectedAnnotation?.kind == .text) { selectedID = nil }
+            // The text and redaction tools keep a selection of their own kind, so it can be restyled
+            // (or resized) without switching tools.
+            if let selected = selectedAnnotation, !tool.keepsSelection(of: selected.kind) { selectedID = nil }
         }
     }
 
@@ -55,6 +56,9 @@ final class EditorDocument: ObservableObject {
 
     var imageBounds: CGRect { CGRect(x: 0, y: 0, width: image.width, height: image.height) }
 
+    /// Draws the redactions from this screenshot and keeps their results while the editor is open.
+    let redactions: RedactionRenderer
+
     /// - Parameter defaults: where the last used style is read from and saved to (a suite in tests).
     init(capture: CapturedImage, fileURL: URL?, defaults: UserDefaults = .standard) {
         image = capture.image
@@ -63,6 +67,7 @@ final class EditorDocument: ObservableObject {
         styleDefaults = defaults
         style = .lastUsed(in: defaults)
         crop = CGRect(x: 0, y: 0, width: capture.image.width, height: capture.image.height)
+        redactions = RedactionRenderer(image: capture.image)
     }
 
     // MARK: - Editing
@@ -94,6 +99,15 @@ final class EditorDocument: ObservableObject {
     /// Whether the style picker is styling text (a selected label, or the text tool with nothing
     /// selected), so it offers fonts and label styles and reads weights as sizes.
     var isStylingText: Bool { selectedAnnotation.map { $0.kind == .text } ?? (tool == .text) }
+
+    /// Whether the style picker is styling a redaction (a selected one, or the tool with nothing
+    /// selected), so it offers blur and pixelate instead of colors and weights.
+    var isStylingRedaction: Bool { selectedAnnotation.map { $0.kind == .redact } ?? (tool == .redact) }
+
+    /// Picks blur or pixelate, for new redactions and the selected one.
+    func pickRedaction(_ mode: RedactionMode) {
+        updateStyle { $0.redaction = mode }
+    }
 
     /// Changes the style for new annotations and, when one is selected, that annotation (undoably).
     /// Only the parts `change` touches are applied, so picking a color keeps the selection's own weight.
@@ -239,9 +253,7 @@ final class EditorDocument: ObservableObject {
         ctx.scaleBy(x: 1, y: -1)
         ctx.translateBy(x: -crop.minX, y: -crop.minY)
         AnnotationRenderer.drawImage(image, in: ctx)
-        for annotation in annotations {
-            AnnotationRenderer.draw(annotation, in: ctx, unit: 1)
-        }
+        AnnotationRenderer.drawAll(annotations, redactions: redactions, visible: crop, in: ctx, unit: 1)
         return ctx.makeImage()
     }
 

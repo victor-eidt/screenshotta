@@ -13,20 +13,29 @@ struct StylePicker: View {
         let style = doc.displayedStyle
         let colorName = AnnotationPalette.swatch(for: style.color)?.name ?? "Custom color"
         // Text reads the weight as a size, so it is described by its size, font and look instead.
-        let summary = doc.isStylingText
+        // A redaction has no color or weight: the chip shows its mode instead.
+        let summary = doc.isStylingRedaction
+            ? style.redaction.title
+            : doc.isStylingText
             ? "\(colorName), \(Int((doc.selectedAnnotation?.fontPointSize ?? style.weight.textPoints).rounded())) pt, \(style.font.title), \(style.label.title)"
             : "\(colorName), \(style.weight.title)"
         Button { isOpen.toggle() } label: {
             HStack(spacing: 8) {
-                SwatchDot(color: style.color, diameter: 18)
-                if doc.isStylingText {
-                    Text("Aa")
-                        .font(Font(style.font.ctFont(size: 12)))
-                        .foregroundStyle(Color.primary.opacity(0.85))
-                        .fixedSize()
+                if doc.isStylingRedaction {
+                    // As wide as the dot and glyph it replaces, so the toolbar doesn't shift.
+                    RedactionGlyph(mode: style.redaction)
+                        .frame(width: 40, height: 18)
                 } else {
-                    WeightGlyph(weight: style.weight, length: 14, thickness: 0.8)
-                        .frame(width: 14)
+                    SwatchDot(color: style.color, diameter: 18)
+                    if doc.isStylingText {
+                        Text("Aa")
+                            .font(Font(style.font.ctFont(size: 12)))
+                            .foregroundStyle(Color.primary.opacity(0.85))
+                            .fixedSize()
+                    } else {
+                        WeightGlyph(weight: style.weight, length: 14, thickness: 0.8)
+                            .frame(width: 14)
+                    }
                 }
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8.5, weight: .bold))
@@ -40,7 +49,9 @@ struct StylePicker: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help("Style: \(summary). Keys 1–\(AnnotationPalette.swatches.count) pick a color")
+        .help(doc.isStylingRedaction
+            ? "Redaction: \(summary). Press B to switch"
+            : "Style: \(summary). Keys 1–\(AnnotationPalette.swatches.count) pick a color")
         .accessibilityLabel("Style")
         .accessibilityValue(summary)
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
@@ -53,8 +64,28 @@ struct StylePopover: View {
     @ObservedObject var doc: EditorDocument
 
     var body: some View {
+        if doc.isStylingRedaction {
+            redactionOptions
+        } else {
+            styleOptions
+        }
+    }
+
+    /// Blur and pixelate, previewed. Their strength isn't a setting: it follows the region's size.
+    private var redactionOptions: some View {
+        HStack(spacing: 6) {
+            ForEach(RedactionMode.allCases) { mode in
+                RedactionModeButton(mode: mode, isSelected: doc.displayedStyle.redaction == mode) {
+                    doc.pickRedaction(mode)
+                }
+            }
+        }
+        .padding(12)
+    }
+
+    private var styleOptions: some View {
         let style = doc.displayedStyle
-        VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 4) {
                 ForEach(Array(AnnotationPalette.swatches.enumerated()), id: \.element.id) { index, swatch in
                     SwatchButton(color: swatch.color, isSelected: style.color == swatch.color, help: "\(swatch.name) (\(index + 1))") {
@@ -325,6 +356,79 @@ private struct LabelStyleButton: View {
                     .overlay(plate.strokeBorder(color, lineWidth: 1.25))
             }
         }
+    }
+}
+
+/// A tiny picture of a redaction: three lines of "text", blurred into a wash or broken into tiles. Both
+/// share the same silhouette and weight, so neither reads louder than the other in the toolbar.
+private struct RedactionGlyph: View {
+    let mode: RedactionMode
+
+    /// The length of each line, as a fraction of the width.
+    private static let lines: [CGFloat] = [0.72, 0.5, 0.62]
+    /// Tile shades along the lines, cycled: a soft mosaic of words, not a checkerboard.
+    private static let shades: [Double] = [0.5, 0.32, 0.58, 0.4, 0.28, 0.52, 0.36]
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = geo.size
+            let shape = RoundedRectangle(cornerRadius: size.height * 0.22, style: .continuous)
+            ZStack {
+                shape.fill(Color.primary.opacity(0.08))
+                switch mode {
+                case .blur:
+                    VStack(alignment: .leading, spacing: size.height * 0.12) {
+                        ForEach(0..<3, id: \.self) { line in
+                            Capsule()
+                                .fill(Color.primary.opacity(0.75))
+                                .frame(width: size.width * Self.lines[line], height: size.height * 0.14)
+                        }
+                    }
+                    .blur(radius: size.height * 0.08)
+                case .pixelate:
+                    let tile = size.height * 0.19
+                    VStack(alignment: .leading, spacing: size.height * 0.05) {
+                        ForEach(0..<3, id: \.self) { line in
+                            HStack(spacing: 0) {
+                                ForEach(0..<max(2, Int((size.width * Self.lines[line] / tile).rounded())), id: \.self) { i in
+                                    Rectangle()
+                                        .fill(Color.primary.opacity(Self.shades[(i + line * 3) % Self.shades.count]))
+                                        .frame(width: tile, height: tile)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .clipShape(shape)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct RedactionModeButton: View {
+    let mode: RedactionMode
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            OptionTile(width: 96, height: 66, isSelected: isSelected, isHovered: isHovered) {
+                VStack(spacing: 6) {
+                    RedactionGlyph(mode: mode)
+                        .frame(width: 44, height: 30)
+                    Text(mode.title)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(isSelected ? .primary : .secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help("\(mode.title) (B switches)")
+        .accessibilityLabel(mode.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

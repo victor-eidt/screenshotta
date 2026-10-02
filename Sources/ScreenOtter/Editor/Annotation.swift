@@ -1,11 +1,11 @@
 import AppKit
 
 enum EditorTool: String, CaseIterable, Identifiable {
-    case select, crop, arrow, line, rectangle, ellipse, pen, text
+    case select, crop, arrow, line, rectangle, ellipse, pen, text, redact
 
     var id: String { rawValue }
 
-    static let drawing: [EditorTool] = [.select, .arrow, .line, .rectangle, .ellipse, .pen, .text]
+    static let drawing: [EditorTool] = [.select, .arrow, .line, .rectangle, .ellipse, .pen, .text, .redact]
 
     var symbol: String {
         switch self {
@@ -17,6 +17,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .ellipse: "circle"
         case .pen: "scribble"
         case .text: "textformat"
+        case .redact: "checkerboard.rectangle"
         }
     }
 
@@ -30,6 +31,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .ellipse: "Circle (O)"
         case .pen: "Pen (P)"
         case .text: "Text (T)"
+        case .redact: "Blur and pixelate (B)"
         }
     }
 
@@ -43,6 +45,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .ellipse: "o"
         case .pen: "p"
         case .text: "t"
+        case .redact: "b"
         }
     }
 
@@ -54,7 +57,19 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .ellipse: .ellipse
         case .pen: .pen
         case .text: .text
+        case .redact: .redact
         case .select, .crop: nil
+        }
+    }
+
+    /// Whether switching to this tool keeps an annotation of `kind` selected: tools that edit their own
+    /// kind in place (restyle a label, resize a redaction) keep it, so the style chip still applies.
+    func keepsSelection(of kind: Annotation.Kind) -> Bool {
+        switch self {
+        case .select: true
+        case .text: kind == .text
+        case .redact: kind == .redact
+        default: false
         }
     }
 }
@@ -63,6 +78,8 @@ enum EditorTool: String, CaseIterable, Identifiable {
 struct Annotation: Identifiable, Equatable {
     enum Kind {
         case arrow, line, rectangle, ellipse, pen, text
+        /// Blurs or pixelates the screenshot under its rect (the style's `redaction` picks which).
+        case redact
     }
 
     var id = UUID()
@@ -92,6 +109,7 @@ struct Annotation: Identifiable, Equatable {
 
     var bounds: CGRect {
         if kind == .text { return TextLayout(self).plate }
+        if kind == .redact { return rect }
         let base: CGRect
         if kind == .pen, let first = points.first {
             base = points.reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
@@ -106,9 +124,13 @@ struct Annotation: Identifiable, Equatable {
         switch kind {
         case .pen: points.count < 2
         case .text: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .redact: min(rect.width, rect.height) < Self.minimumRedactionSide * scale
         default: hypot(end.x - start.x, end.y - start.y) < width
         }
     }
+
+    /// The smallest side of a redaction, in points: smaller is a click, and can't hide anything anyway.
+    static let minimumRedactionSide: CGFloat = 4
 
     mutating func translate(by delta: CGPoint) {
         start = start + delta
@@ -123,6 +145,8 @@ struct Annotation: Identifiable, Equatable {
             return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(p)
         case .rectangle, .ellipse:
             return rect.insetBy(dx: -t, dy: -t).contains(p)
+        case .redact:
+            return rect.insetBy(dx: -tolerance, dy: -tolerance).contains(p)
         case .line, .arrow:
             return distance(from: p, toSegment: start, end) <= t
         case .pen:
@@ -155,9 +179,25 @@ enum AnnotationRenderer {
         ctx.restoreGState()
     }
 
+    /// Draws every annotation over the screenshot: redactions first, from the screenshot's own pixels, so
+    /// arrows and labels on top of a redacted region stay crisp and never get blurred into it.
+    /// - Parameter visible: the part of the image being drawn (the crop), in image pixels.
+    static func drawAll(_ annotations: [Annotation], redactions: RedactionRenderer, visible: CGRect, in ctx: CGContext, unit: CGFloat) {
+        let redacted = annotations.filter { $0.kind == .redact }
+        for a in redacted {
+            redactions.draw(a, visible: visible, in: ctx)
+        }
+        redactions.keepOnly(Set(redacted.map(\.id)))
+        for a in annotations where a.kind != .redact {
+            draw(a, in: ctx, unit: unit)
+        }
+    }
+
     /// - Parameter unit: device units per image pixel (shadows ignore the CTM, so they need it).
     static func draw(_ a: Annotation, in ctx: CGContext, unit: CGFloat) {
         if a.kind == .text { return drawText(a, in: ctx, unit: unit) }
+        // Redactions need the screenshot's pixels and are drawn by `drawAll`.
+        if a.kind == .redact { return }
         ctx.saveGState()
         ctx.setShadow(
             offset: CGSize(width: 0, height: -a.width * 0.3 * unit),
@@ -191,7 +231,7 @@ enum AnnotationRenderer {
         case .pen:
             ctx.addPath(smoothPath(a.points))
             ctx.strokePath()
-        case .text:
+        case .text, .redact:
             break
         }
         ctx.restoreGState()

@@ -6,14 +6,6 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
     private let doc: EditorDocument
     private var cancellable: AnyCancellable?
 
-    private struct Edges: OptionSet {
-        let rawValue: Int
-        static let left = Edges(rawValue: 1)
-        static let right = Edges(rawValue: 2)
-        static let top = Edges(rawValue: 4)
-        static let bottom = Edges(rawValue: 8)
-    }
-
     private enum Drag {
         case drawing(Annotation)
         case moving(id: UUID, last: CGPoint, didMove: Bool)
@@ -21,9 +13,11 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         case pressingText(id: UUID, start: CGPoint)
         /// The corner handle of a label: `anchor` is the plate corner that stays put.
         case resizingText(id: UUID, anchor: CGPoint, corner: CGPoint, original: CGFloat, didResize: Bool)
+        /// A corner or edge of a redaction, measured from where it was grabbed.
+        case resizingRedaction(id: UUID, edges: RectEdges, start: CGPoint, original: CGRect, didResize: Bool)
         case newCrop(anchor: CGPoint)
         case moveCrop(start: CGPoint, original: CGRect)
-        case resizeCrop(edges: Edges, original: CGRect)
+        case resizeCrop(edges: RectEdges, original: CGRect)
     }
 
     private var drag: Drag?
@@ -124,29 +118,42 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         ctx.translateBy(x: -region.minX, y: -region.minY)
         ctx.interpolationQuality = .high
         AnnotationRenderer.drawImage(doc.image, in: ctx)
-        for annotation in doc.annotations {
-            AnnotationRenderer.draw(annotation, in: ctx, unit: k)
-        }
-        if case let .drawing(draft) = drag {
-            AnnotationRenderer.draw(draft, in: ctx, unit: k)
-        }
+        var visible = doc.annotations
+        if case let .drawing(draft) = drag { visible.append(draft) }
+        AnnotationRenderer.drawAll(visible, redactions: doc.redactions, visible: region, in: ctx, unit: k)
         ctx.restoreGState()
+
+        // A redaction being dragged out shows its extent: over flat areas its pixels look like the
+        // original, and the block size depends on how far it reaches. On screen only, never exported.
+        if case let .drawing(draft) = drag, draft.kind == .redact {
+            strokeOutline(selectionOutline(for: draft))
+        }
 
         if let id = doc.selectedID, let selected = doc.annotations.first(where: { $0.id == id }) {
             let outline = selectionOutline(for: selected)
-            let path = NSBezierPath(cgPath: ContinuousCorners.path(in: outline.rect, radius: outline.radius))
-            path.lineWidth = 1.5
-            path.setLineDash([5, 4], count: 2, phase: 0)
-            NSColor.controlAccentColor.setStroke()
-            path.stroke()
+            strokeOutline(outline)
             if selected.kind == .text, doc.editingTextID == nil {
                 drawResizeHandle(at: resizeHandleCenter(for: selected), in: ctx)
+            }
+            if selected.kind == .redact {
+                for corner in cornerHandleCenters(of: outline) {
+                    drawResizeHandle(at: corner, in: ctx)
+                }
             }
         }
 
         if doc.tool == .crop, let pending = doc.pendingCrop {
             drawCropOverlay(toView(pending), imageFrame: imageFrame, pixelSize: pending.size)
         }
+    }
+
+    /// The dashed accent outline of a selection.
+    private func strokeOutline(_ outline: (rect: CGRect, radius: CGFloat)) {
+        let path = NSBezierPath(cgPath: ContinuousCorners.path(in: outline.rect, radius: outline.radius))
+        path.lineWidth = 1.5
+        path.setLineDash([5, 4], count: 2, phase: 0)
+        NSColor.controlAccentColor.setStroke()
+        path.stroke()
     }
 
     private func drawCropOverlay(_ crop: CGRect, imageFrame: CGRect, pixelSize: CGSize) {
@@ -223,8 +230,12 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
     private func selectionOutline(for a: Annotation) -> (rect: CGRect, radius: CGFloat) {
         let gap: CGFloat = 3
         let rect = toView(a.bounds).insetBy(dx: -gap, dy: -gap)
-        guard a.kind == .text, a.style.label != .plain else { return (rect, 4) }
         let (k, _) = layoutInfo
+        if a.kind == .redact {
+            let radius = RedactionGeometry.cornerRadius(for: a.rect, scale: a.scale) * k + gap
+            return (rect, min(radius, ContinuousCorners.maxRadius(for: rect)))
+        }
+        guard a.kind == .text, a.style.label != .plain else { return (rect, 4) }
         let plate = a.bounds
         let radius = TextLabelMetrics(label: a.style.label, fontSize: a.fontPixelSize).cornerRadius(for: plate) * k + gap
         return (rect, min(radius, ContinuousCorners.maxRadius(for: rect)))
@@ -235,6 +246,41 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         let outline = selectionOutline(for: a)
         let inset = outline.radius * ContinuousCorners.diagonalInset
         return CGPoint(x: outline.rect.maxX - inset, y: outline.rect.maxY - inset)
+    }
+
+    /// The four corners of a selection outline, on its curve.
+    private func cornerHandleCenters(of outline: (rect: CGRect, radius: CGFloat)) -> [CGPoint] {
+        let r = outline.rect
+        let inset = outline.radius * ContinuousCorners.diagonalInset
+        return [
+            CGPoint(x: r.minX + inset, y: r.minY + inset), CGPoint(x: r.maxX - inset, y: r.minY + inset),
+            CGPoint(x: r.minX + inset, y: r.maxY - inset), CGPoint(x: r.maxX - inset, y: r.maxY - inset),
+        ]
+    }
+
+    /// The selected redaction, when it can be resized (with the select or redaction tool).
+    private var resizableRedaction: Annotation? {
+        guard doc.tool == .select || doc.tool == .redact,
+              let selected = doc.selectedAnnotation, selected.kind == .redact
+        else { return nil }
+        return selected
+    }
+
+    /// How far from a redaction's outline its corners and edges can be grabbed, in view points.
+    private static let edgeGrabTolerance: CGFloat = EditorCanvasView.handleRadius + 3
+
+    /// The selected redaction and the edges under the pointer, when it is on a corner or an edge.
+    private func redactionResizeTarget(at viewPoint: CGPoint) -> (Annotation, RectEdges)? {
+        guard let redaction = resizableRedaction else { return nil }
+        let edges = RectResize.edges(at: viewPoint, of: selectionOutline(for: redaction).rect, tolerance: Self.edgeGrabTolerance)
+        return edges.isEmpty ? nil : (redaction, edges)
+    }
+
+    /// The topmost annotation under a point. Redactions sit under everything else when drawn, so the
+    /// shapes and labels on top of one are found first.
+    private func annotation(at p: CGPoint, tolerance: CGFloat) -> Annotation? {
+        doc.annotations.last { $0.kind != .redact && $0.hitTest(p, tolerance: tolerance) }
+            ?? doc.annotations.last { $0.kind == .redact && $0.hitTest(p, tolerance: tolerance) }
     }
 
     /// Where the resize handle can be grabbed: a little larger than the drawn dot.
@@ -280,6 +326,43 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             }
             addCursorRect(resizeHandleHitRect(for: label), cursor: cursor)
         }
+        if let redaction = resizableRedaction {
+            addRedactionCursorRects(selectionOutline(for: redaction).rect)
+        }
+    }
+
+    /// An open hand inside a redaction (a press there moves it), resize cursors along its edges and on
+    /// its corners. The bands match `RectResize.edges`, so the cursor shows what a press will do.
+    private func addRedactionCursorRects(_ outline: CGRect) {
+        let t = Self.edgeGrabTolerance
+        let ix = RectResize.inwardReach(across: outline.width, tolerance: t)
+        let iy = RectResize.inwardReach(across: outline.height, tolerance: t)
+        let grab = outline.insetBy(dx: -t, dy: -t)
+        let inner = outline.insetBy(dx: ix, dy: iy)
+        addCursorRect(inner, cursor: .openHand)
+        let left = CGRect(x: grab.minX, y: inner.minY, width: t + ix, height: inner.height)
+        let right = CGRect(x: inner.maxX, y: inner.minY, width: t + ix, height: inner.height)
+        let top = CGRect(x: inner.minX, y: grab.minY, width: inner.width, height: t + iy)
+        let bottom = CGRect(x: inner.minX, y: inner.maxY, width: inner.width, height: t + iy)
+        guard #available(macOS 15, *) else {
+            // No diagonal resize cursors before macOS 15: the corners keep the tool's cursor.
+            addCursorRect(left, cursor: .resizeLeftRight)
+            addCursorRect(right, cursor: .resizeLeftRight)
+            addCursorRect(top, cursor: .resizeUpDown)
+            addCursorRect(bottom, cursor: .resizeUpDown)
+            return
+        }
+        let corner = CGSize(width: t + ix, height: t + iy)
+        let rects: [(CGRect, NSCursor.FrameResizePosition)] = [
+            (left, .left), (right, .right), (top, .top), (bottom, .bottom),
+            (CGRect(origin: grab.origin, size: corner), .topLeft),
+            (CGRect(origin: CGPoint(x: inner.maxX, y: grab.minY), size: corner), .topRight),
+            (CGRect(origin: CGPoint(x: grab.minX, y: inner.maxY), size: corner), .bottomLeft),
+            (CGRect(origin: CGPoint(x: inner.maxX, y: inner.maxY), size: corner), .bottomRight),
+        ]
+        for (rect, position) in rects {
+            addCursorRect(rect, cursor: .frameResize(position: position, directions: .all))
+        }
     }
 
     // MARK: - Mouse
@@ -308,9 +391,14 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             return
         }
 
+        if let (redaction, edges) = redactionResizeTarget(at: viewPoint) {
+            drag = .resizingRedaction(id: redaction.id, edges: edges, start: p, original: redaction.rect, didResize: false)
+            return
+        }
+
         switch doc.tool {
         case .select:
-            if let hit = doc.annotations.last(where: { $0.hitTest(p, tolerance: 6 / k) }) {
+            if let hit = annotation(at: p, tolerance: 6 / k) {
                 if hit.kind == .text, event.clickCount == 2 {
                     doc.beginEditingText(hit.id)
                     return
@@ -336,7 +424,7 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             }
         case .crop:
             let current = doc.pendingCrop ?? doc.crop
-            let edges = cropEdges(at: viewPoint, crop: toView(current))
+            let edges = RectResize.edges(at: viewPoint, of: toView(current), tolerance: 8)
             if !edges.isEmpty {
                 drag = .resizeCrop(edges: edges, original: current)
             } else if current.contains(p) {
@@ -345,6 +433,17 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
                 let anchor = clampToImage(p)
                 doc.pendingCrop = CGRect(origin: anchor, size: .zero)
                 drag = .newCrop(anchor: anchor)
+            }
+        case .redact:
+            // Pressing on a redaction picks it up (to move, resize or switch its mode, like the text tool
+            // with labels); anywhere else draws a new one, starting inside the image.
+            if let hit = doc.annotations.last(where: { $0.kind == .redact && $0.hitTest(p, tolerance: 0) }) {
+                doc.selectedID = hit.id
+                drag = .moving(id: hit.id, last: p, didMove: false)
+            } else {
+                let start = clampToImage(p)
+                doc.selectedID = nil
+                drag = .drawing(Annotation(kind: .redact, start: start, end: start, style: doc.style, scale: doc.scale))
             }
         default:
             guard let kind = doc.tool.annotationKind else { return }
@@ -364,13 +463,20 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
                 annotation.points.append(p)
             } else {
                 annotation.end = shift ? constrained(p, from: annotation.start, kind: annotation.kind) : p
+                // A redaction covers the image only, so its outline stays on what it redacts.
+                if annotation.kind == .redact { annotation.end = clampToImage(annotation.end) }
             }
             drag = .drawing(annotation)
         case let .moving(id, last, didMove):
             guard let index = doc.annotations.firstIndex(where: { $0.id == id }) else { return }
             if !didMove { doc.checkpoint() }
-            doc.annotations[index].translate(by: p - last)
-            drag = .moving(id: id, last: p, didMove: true)
+            var delta = p - last
+            if doc.annotations[index].kind == .redact {
+                // Redactions stay on the image; past its edge the region waits for the pointer to come back.
+                delta = RectResize.translation(moving: doc.annotations[index].rect, by: delta, within: doc.imageBounds)
+            }
+            doc.annotations[index].translate(by: delta)
+            drag = .moving(id: id, last: last + delta, didMove: true)
         case let .pressingText(id, start):
             let (k, _) = layoutInfo
             guard hypot(p.x - start.x, p.y - start.y) * k > 3,
@@ -387,6 +493,14 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             doc.annotations[index].start = TextLabelMetrics(label: doc.annotations[index].style.label, fontSize: size)
                 .inkOrigin(forPlateAt: anchor)
             drag = .resizingText(id: id, anchor: anchor, corner: corner, original: original, didResize: true)
+        case let .resizingRedaction(id, edges, start, original, didResize):
+            guard let index = doc.annotations.firstIndex(where: { $0.id == id }) else { return }
+            if !didResize { doc.checkpoint() }
+            let rect = RectResize.resized(original, edges: edges, by: p - start, minimumSide: Annotation.minimumRedactionSide * doc.scale)
+                .intersection(doc.imageBounds)
+            doc.annotations[index].start = rect.origin
+            doc.annotations[index].end = CGPoint(x: rect.maxX, y: rect.maxY)
+            drag = .resizingRedaction(id: id, edges: edges, start: start, original: original, didResize: true)
         case let .newCrop(anchor):
             var end = clampToImage(p)
             if shift {
@@ -417,6 +531,8 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
     override func mouseUp(with event: NSEvent) {
         if case let .drawing(annotation) = drag, !annotation.isDegenerate {
             doc.add(annotation)
+            // A new redaction stays selected, ready to be nudged, resized or switched to the other mode.
+            if annotation.kind == .redact { doc.selectedID = annotation.id }
         }
         if case let .pressingText(id, _) = drag {
             doc.beginEditingText(id)
@@ -428,17 +544,6 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         needsDisplay = true
     }
 
-    private func cropEdges(at p: NSPoint, crop: CGRect) -> Edges {
-        let tolerance: CGFloat = 8
-        guard crop.insetBy(dx: -tolerance, dy: -tolerance).contains(p) else { return [] }
-        var edges: Edges = []
-        if abs(p.x - crop.minX) < tolerance { edges.insert(.left) }
-        if abs(p.x - crop.maxX) < tolerance { edges.insert(.right) }
-        if abs(p.y - crop.minY) < tolerance { edges.insert(.top) }
-        if abs(p.y - crop.maxY) < tolerance { edges.insert(.bottom) }
-        return edges
-    }
-
     private func clampToImage(_ p: CGPoint) -> CGPoint {
         CGPoint(x: min(max(p.x, 0), CGFloat(doc.image.width)), y: min(max(p.y, 0), CGFloat(doc.image.height)))
     }
@@ -448,7 +553,7 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
         let dx = p.x - start.x
         let dy = p.y - start.y
         switch kind {
-        case .rectangle, .ellipse:
+        case .rectangle, .ellipse, .redact:
             let side = max(abs(dx), abs(dy))
             return CGPoint(x: start.x + (dx < 0 ? -side : side), y: start.y + (dy < 0 ? -side : side))
         default:
@@ -476,9 +581,13 @@ final class EditorCanvasView: NSView, NSTextViewDelegate {
             if doc.tool == .crop { doc.cancelCrop() } else { doc.selectedID = nil }
         default:
             let character = flags.isEmpty ? event.charactersIgnoringModifiers?.lowercased().first : nil
-            if let character, let tool = EditorTool.allCases.first(where: { $0.shortcutKey == character }) {
+            if let character, character == EditorTool.redact.shortcutKey, doc.isStylingRedaction {
+                // With the redaction tool, or a redaction selected, B switches blur and pixelate (for the
+                // selected redaction too), as the style chip says.
+                doc.pickRedaction(doc.displayedStyle.redaction.toggled)
+            } else if let character, let tool = EditorTool.allCases.first(where: { $0.shortcutKey == character }) {
                 doc.tool = tool
-            } else if let character, let swatch = AnnotationPalette.swatch(forKey: character) {
+            } else if let character, !doc.isStylingRedaction, let swatch = AnnotationPalette.swatch(forKey: character) {
                 doc.updateStyle { $0.color = swatch.color }
             } else {
                 super.keyDown(with: event)
