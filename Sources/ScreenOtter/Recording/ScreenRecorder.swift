@@ -24,7 +24,7 @@ nonisolated final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelega
     /// Called on a background queue when the stream stops by itself (the window closed, permission revoked).
     var onFailure: (@Sendable (Error) -> Void)?
 
-    private let queue = DispatchQueue(label: "com.victor.screenshotta.recorder")
+    private let queue = DispatchQueue(label: "com.victor.screenotter.recorder")
     private var stream: SCStream?
     private let writer: AVAssetWriter
     private let input: AVAssetWriterInput

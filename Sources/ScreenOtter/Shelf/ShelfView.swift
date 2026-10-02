@@ -21,7 +21,7 @@ struct ShelfView: View {
         }
         .overlay {
             RoundedRectangle(cornerRadius: ShelfController.cornerRadius, style: .continuous)
-                .strokeBorder(Color.accentColor, lineWidth: 3)
+                .strokeBorder(Brand.accent, lineWidth: 3)
                 .opacity(controller.isDropTargeted ? 1 : 0)
                 .allowsHitTesting(false)
         }
@@ -281,7 +281,7 @@ private struct SelectionBackground: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(Color.accentColor.opacity(isSelected ? 0.4 : 0))
+            .fill(Brand.accent.opacity(isSelected ? 0.4 : 0))
     }
 }
 

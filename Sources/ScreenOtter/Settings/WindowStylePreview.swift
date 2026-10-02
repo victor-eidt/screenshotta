@@ -54,7 +54,7 @@ struct WindowStylePreview: View {
                 }
                 VStack(alignment: .leading, spacing: 7) {
                     RoundedRectangle(cornerRadius: 3).fill(.primary.opacity(0.18)).frame(width: 120, height: 9)
-                    RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.25)).frame(height: 50)
+                    RoundedRectangle(cornerRadius: 6).fill(Brand.accent.opacity(0.25)).frame(height: 50)
                     RoundedRectangle(cornerRadius: 2).fill(.primary.opacity(0.1)).frame(height: 6)
                     RoundedRectangle(cornerRadius: 2).fill(.primary.opacity(0.1)).frame(width: 160, height: 6)
                 }

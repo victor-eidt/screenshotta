@@ -168,7 +168,7 @@ final class ShelfController: NSObject, ObservableObject {
         let menu = NSMenu()
         menu.addItem(ClosureMenuItem("Open", symbol: "arrow.up.forward.app") { [weak self] in self?.open(items) })
         if items.count == 1, let item = items.first, item.isImage {
-            menu.addItem(ClosureMenuItem("Edit in Screenshotta", symbol: "pencil.tip.crop.circle") {
+            menu.addItem(ClosureMenuItem("Edit in ScreenOtter", symbol: "pencil.tip.crop.circle") {
                 EditorWindowController.open(fileURL: item.url)
             })
         }

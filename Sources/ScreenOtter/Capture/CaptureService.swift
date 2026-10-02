@@ -8,7 +8,7 @@ enum CaptureError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .permissionDenied: "Screenshotta needs Screen Recording permission."
+        case .permissionDenied: "ScreenOtter needs Screen Recording permission."
         case .displayNotFound: "Couldn't find the display to capture."
         case .windowNotFound: "That window is no longer on screen."
         }

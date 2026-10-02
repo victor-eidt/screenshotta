@@ -63,7 +63,7 @@ enum CaptureOutput {
 
     /// A file to drag out of the thumbnail when saving to the folder is turned off.
     static func temporaryFile(for capture: CapturedImage) -> URL? {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("Screenshotta", isDirectory: true)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("ScreenOtter", isDirectory: true)
         return try? save(capture, in: folder)
     }
 
@@ -108,7 +108,7 @@ enum CaptureOutput {
         alert.alertStyle = .warning
         if case CaptureError.permissionDenied = error {
             alert.messageText = "Screen Recording permission needed"
-            alert.informativeText = "Allow Screenshotta in System Settings › Privacy & Security › Screen & System Audio Recording, then reopen the app."
+            alert.informativeText = "Allow ScreenOtter in System Settings › Privacy & Security › Screen & System Audio Recording, then reopen the app."
             alert.addButton(withTitle: "Open System Settings")
             alert.addButton(withTitle: "Cancel")
             NSApp.activate(ignoringOtherApps: true)

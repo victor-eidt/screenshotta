@@ -94,10 +94,10 @@ private struct Playhead: View {
     var body: some View {
         VStack(spacing: 0) {
             Circle()
-                .fill(Color.accentColor)
+                .fill(Brand.accent)
                 .frame(width: Self.width, height: Self.width)
             Rectangle()
-                .fill(Color.accentColor)
+                .fill(Brand.accent)
                 .frame(width: 2, height: max(height - Self.width, 0))
         }
         .frame(width: Self.width)

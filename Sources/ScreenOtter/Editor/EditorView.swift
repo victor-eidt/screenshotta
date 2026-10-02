@@ -31,6 +31,9 @@ struct EditorView: View {
     private var topBar: some View {
         HStack(spacing: 6) {
             Color.clear.frame(width: 76, height: 1) // traffic lights
+            AppIconImage(size: 20)
+                .padding(.trailing, 4)
+                .help(Brand.name)
 
             BarButton(symbol: "trash", help: "Delete screenshot", action: actions.delete)
             BarButton(symbol: "arrow.uturn.backward", help: "Undo (⌘Z)", action: doc.undo)
@@ -178,8 +181,8 @@ private struct ToolButton: View {
             Image(systemName: tool.symbol)
                 .font(.system(size: 14, weight: selected ? .semibold : .regular))
                 .frame(width: 30, height: 30)
-                .foregroundStyle(selected ? Color.accentColor : Color.primary.opacity(0.8))
-                .background(Circle().fill(selected ? Color.accentColor.opacity(0.2) : .clear))
+                .foregroundStyle(selected ? Brand.accent : Color.primary.opacity(0.8))
+                .background(Circle().fill(selected ? Brand.accent.opacity(0.2) : .clear))
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
@@ -216,10 +219,10 @@ private struct StrokeButton: View {
         let selected = selection == size
         Button { selection = size } label: {
             Capsule()
-                .fill(selected ? Color.accentColor : Color.primary.opacity(0.7))
+                .fill(selected ? Brand.accent : Color.primary.opacity(0.7))
                 .frame(width: 16, height: size.points * 0.9)
                 .frame(width: 28, height: 30)
-                .background(Circle().fill(selected ? Color.accentColor.opacity(0.2) : .clear).frame(width: 30, height: 30))
+                .background(Circle().fill(selected ? Brand.accent.opacity(0.2) : .clear).frame(width: 30, height: 30))
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -2,19 +2,40 @@ import AppKit
 import SwiftUI
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, output, windowStyle, shelf, shortcuts, permissions, about
+    case general, output, windowStyle, recording, shelf, shortcuts, permissions, about
 
     var id: String { rawValue }
+
+    /// The sidebar's groups, top to bottom.
+    static let groups: [[SettingsPane]] = [
+        [.general, .output, .windowStyle, .recording, .shelf],
+        [.shortcuts, .permissions],
+        [.about],
+    ]
 
     var title: String {
         switch self {
         case .general: "General"
         case .output: "After Capture"
         case .windowStyle: "Window Style"
+        case .recording: "Recording"
         case .shelf: "Shelf"
         case .shortcuts: "Shortcuts"
         case .permissions: "Permissions"
         case .about: "About"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .general: "Capture and record from anywhere, right from the menu bar."
+        case .output: "Where screenshots go, and the preview that follows them."
+        case .windowStyle: "How window screenshots look: background, frame and shadow."
+        case .recording: "Screen recordings, and the drafts they leave behind."
+        case .shelf: "A floating spot to hold files for a moment."
+        case .shortcuts: "Global shortcuts, active in any app."
+        case .permissions: "What macOS needs to allow before ScreenOtter can capture."
+        case .about: Brand.tagline
         }
     }
 
@@ -23,8 +44,9 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: "gearshape.fill"
         case .output: "photo.on.rectangle.angled"
         case .windowStyle: "macwindow"
+        case .recording: "record.circle.fill"
         case .shelf: "tray.2.fill"
-        case .shortcuts: "keyboard.fill"
+        case .shortcuts: "command"
         case .permissions: "lock.shield.fill"
         case .about: "info.circle.fill"
         }
@@ -32,11 +54,12 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
     var tint: Color {
         switch self {
-        case .general: .gray
-        case .output: .blue
+        case .general: Color(white: 0.55)
+        case .output: Brand.accent
         case .windowStyle: .purple
+        case .recording: .red
         case .shelf: .orange
-        case .shortcuts: .red
+        case .shortcuts: .teal
         case .permissions: .green
         case .about: .indigo
         }
@@ -44,7 +67,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 }
 
 final class SettingsModel: ObservableObject {
-    @Published var pane: SettingsPane? = .general
+    @Published var pane: SettingsPane = .general
 }
 
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
@@ -59,12 +82,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.title = "Screenshotta Settings"
-        window.toolbar = NSToolbar(identifier: "settings")
-        window.toolbarStyle = .unified
+        window.title = "ScreenOtter Settings"
+        window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 780, height: 560))
-        window.minSize = NSSize(width: 700, height: 460)
+        window.setContentSize(NSSize(width: 840, height: 600))
+        window.minSize = NSSize(width: 760, height: 520)
         window.center()
         window.setFrameAutosaveName("SettingsWindow")
         super.init(window: window)

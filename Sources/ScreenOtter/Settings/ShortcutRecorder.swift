@@ -88,17 +88,13 @@ private struct KeyCap: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.accentColor)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(Brand.accent)
             .padding(.horizontal, text.count > 1 ? 8 : 0)
-            .frame(minWidth: 30, minHeight: 30)
+            .frame(minWidth: 28, minHeight: 28)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.14))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.accentColor, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Brand.accent.opacity(0.13))
             )
     }
 }
@@ -109,17 +105,13 @@ private struct Chip: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Color.accentColor)
-            .padding(.horizontal, 14)
-            .frame(minHeight: 30)
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundStyle(highlighted ? Color.white : Brand.accent)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 28)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.accentColor.opacity(highlighted ? 0.2 : 0.12))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.accentColor.opacity(highlighted ? 1 : 0.25), lineWidth: highlighted ? 1.5 : 1)
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(highlighted ? Brand.accent : Brand.accent.opacity(0.13))
             )
     }
 }

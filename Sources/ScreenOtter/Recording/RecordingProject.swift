@@ -193,8 +193,7 @@ nonisolated struct RecordingProject: Sendable {
     var wallpaperURL: URL { folder.appendingPathComponent("wallpaper.png") }
 
     static var libraryFolder: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Screenshotta/Recordings", isDirectory: true)
+        AppFolders.support.appendingPathComponent("Recordings", isDirectory: true)
     }
 
     static func create(named name: String) throws -> RecordingProject {

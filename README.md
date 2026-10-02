@@ -1,6 +1,8 @@
-# Screenshotta
+<p align="center"><img src="Resources/Brand/ScreenOtterNoBG.png" width="160" alt="ScreenOtter icon"></p>
 
-A small macOS menu bar screenshot tool.
+# ScreenOtter
+
+A macOS menu bar app for screenshots and screen recordings. A sea otter keeps its favorite stone tucked under its arm; ScreenOtter keeps the things you capture.
 
 - **Capture Area** (default `⌥⇧4`): crosshair, drag a rectangle, done. Full-bleed, no frame.
 - **Capture Window** (default `⌥⇧5`): hover a window and click. The window keeps its rounded corners and sits on your desktop wallpaper with a very subtle shadow, ready for demos. Traffic lights are always in color: if the window was inactive, the gray ones are repainted.
@@ -16,19 +18,21 @@ A small macOS menu bar screenshot tool.
   - **Zoom**: auto zoom eases in on clusters of clicks and follows the pointer, then eases back out. Click or drag on the zoom track to add your own; drag to move, drag the ends to resize.
   - **Clips**: drag the ends of a clip to trim, split at the playhead (`S`), delete a piece, and set each clip's speed (0.5× to 4×). Space plays, ← → step a frame, `⌘Z` undoes.
   - **Export** (`⌘E`): MP4 at 720p, 1080p, 1440p or 4K, saved to the screenshots folder (and copied as a file to the clipboard). The last style you used becomes the default for the next recording.
-  - **Drafts**: every recording is a draft. Edits save as you go; the Drafts window (menu bar › Drafts › Show All Drafts…, Settings, or the stack button in the editor) lists them all to reopen, rename, duplicate or trash. They live in `~/Library/Application Support/Screenshotta/Recordings`.
+  - **Drafts**: every recording is a draft. Edits save as you go; the Drafts window (menu bar › Drafts › Show All Drafts…, Settings, or the stack button in the editor) lists them all to reopen, rename, duplicate or trash. They live in `~/Library/Application Support/ScreenOtter/Recordings`.
 
 ## Build & install
 
 Requires macOS 14+ and Xcode 26 (Swift 6.2).
 
 ```sh
-./scripts/build.sh            # builds build/Screenshotta.app
+./scripts/build.sh            # builds build/ScreenOtter.app
 ./scripts/build.sh --install  # also copies it to /Applications and launches it
 ```
 
 The build signs with your first code-signing identity (override with `SIGN_IDENTITY=...`) so the Screen Recording permission survives rebuilds.
-The icon lives in `Resources/AppIcon.icns`; regenerate it with `swift scripts/make-icon.swift . && iconutil -c icns build/AppIcon.iconset -o Resources/AppIcon.icns`.
+The artwork lives in `Resources/Brand`. `swift scripts/make-icons.swift` turns it into the app icon (`Resources/AppIcon.icns`), the menu bar icon and the illustration the app uses.
+
+ScreenOtter used to be called Screenshotta. It keeps the old bundle identifier, so permissions and settings carry over, and moves its data to `~/Library/Application Support/ScreenOtter` on first launch.
 
 ## Permissions
 
@@ -37,10 +41,10 @@ The icon lives in `Resources/AppIcon.icns`; regenerate it with `swift scripts/ma
 
 ## Layout
 
-- `Sources/Screenshotta/Capture`: selection overlay, ScreenCaptureKit capture, window styling, output
-- `Sources/Screenshotta/Thumbnail`: the floating post-capture preview
-- `Sources/Screenshotta/Editor`: crop and annotation editor
-- `Sources/Screenshotta/Shelf`: floating shelves, their history and shake-to-open
-- `Sources/Screenshotta/Recording`: screen recording (ScreenCaptureKit to HEVC, pointer tracking), the Core Image frame renderer (background, cursor, camera), and the video editor
-- `Sources/Screenshotta/Settings`: SwiftUI settings window
-- `Sources/Screenshotta/Hotkeys`: global shortcuts (Carbon hotkeys, no Accessibility needed)
+- `Sources/ScreenOtter/Capture`: selection overlay, ScreenCaptureKit capture, window styling, output
+- `Sources/ScreenOtter/Thumbnail`: the floating post-capture preview
+- `Sources/ScreenOtter/Editor`: crop and annotation editor
+- `Sources/ScreenOtter/Shelf`: floating shelves, their history and shake-to-open
+- `Sources/ScreenOtter/Recording`: screen recording (ScreenCaptureKit to HEVC, pointer tracking), the Core Image frame renderer (background, cursor, camera), and the video editor
+- `Sources/ScreenOtter/Settings`: SwiftUI settings window
+- `Sources/ScreenOtter/Hotkeys`: global shortcuts (Carbon hotkeys, no Accessibility needed)

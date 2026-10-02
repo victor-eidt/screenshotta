@@ -68,7 +68,8 @@ private struct RecordingTopBar: View {
 
             Spacer(minLength: 12)
 
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
+                AppIconImage(size: 18)
                 Text(doc.metadata.title)
                     .foregroundStyle(.primary)
                 Text(RecordingFormat.duration(doc.duration))

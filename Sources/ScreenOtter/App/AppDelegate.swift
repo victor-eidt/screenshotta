@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var recordingTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppFolders.migrateFromOldName()
         MainMenu.install()
         BackgroundCursor.enable()
         setupStatusItem()
@@ -30,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return false
     }
 
-    /// Opening an image with Screenshotta (Dock drop, "Open With") edits it in place.
+    /// Opening an image with ScreenOtter (Dock drop, "Open With") edits it in place.
     func application(_ sender: NSApplication, open urls: [URL]) {
         urls.forEach(EditorWindowController.open(fileURL:))
     }
@@ -38,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Menu bar
 
     private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusMenu.delegate = self
         updateStatusItem(for: .idle)
     }
@@ -50,12 +51,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         recordingTimer = nil
 
         guard case let .recording(since) = state else {
-            let image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Screenshotta")
+            let image = Brand.menuBarIcon ?? NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: Brand.name)
             image?.isTemplate = true
             button.image = image
             button.title = ""
             button.action = nil
-            statusItem.length = NSStatusItem.squareLength
+            statusItem.length = NSStatusItem.variableLength
             statusItem.menu = statusMenu
             return
         }
@@ -109,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         menu.addItem(settings)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Screenshotta", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit ScreenOtter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         for item in menu.items where item.action != #selector(NSApplication.terminate(_:)) {
             item.target = self
@@ -347,14 +348,14 @@ enum MainMenu {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About Screenshotta", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About ScreenOtter", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(MenuActions.openSettings), keyEquivalent: ",")
         settings.target = MenuActions.shared
         appMenu.addItem(settings)
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Hide Screenshotta", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
-        appMenu.addItem(withTitle: "Quit Screenshotta", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Hide ScreenOtter", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Quit ScreenOtter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         main.addItem(appItem)
 

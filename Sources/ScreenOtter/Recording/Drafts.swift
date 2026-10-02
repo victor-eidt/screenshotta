@@ -140,9 +140,19 @@ private struct DraftsView: View {
             Divider()
             if library.drafts.isEmpty {
                 ContentUnavailableView {
-                    Label("No Drafts Yet", systemImage: "film.stack")
+                    VStack(spacing: 14) {
+                        if let illustration = Brand.illustration {
+                            Image(nsImage: illustration)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 150, height: 150)
+                                .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+                                .shadow(color: .black.opacity(0.15), radius: 10, y: 4)
+                        }
+                        Text("No Drafts Yet")
+                    }
                 } description: {
-                    Text("Every recording shows up here with its edits, ready to pick up again.")
+                    Text("Like an otter with its favorite stone, ScreenOtter keeps every recording here with its edits, ready to pick up again.")
                 } actions: {
                     Button("Record Screen") { RecordingController.shared.toggle() }
                 }
@@ -166,6 +176,7 @@ private struct DraftsView: View {
     private var header: some View {
         HStack(spacing: 12) {
             Color.clear.frame(width: 64, height: 1) // traffic lights
+            AppIconImage(size: 24)
             Text("Drafts")
                 .font(.system(size: 15, weight: .semibold))
             Text("\(library.drafts.count)")
@@ -235,7 +246,7 @@ private struct DraftCard: View {
             }
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(isHovering ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: isHovering ? 2 : 1)
+                    .strokeBorder(isHovering ? Brand.accent : Color.primary.opacity(0.08), lineWidth: isHovering ? 2 : 1)
             )
 
             if renaming == draft.id {

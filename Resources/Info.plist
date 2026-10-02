@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Screenshotta</string>
+    <string>ScreenOtter</string>
     <key>CFBundleDisplayName</key>
-    <string>Screenshotta</string>
+    <string>ScreenOtter</string>
     <key>CFBundleIdentifier</key>
     <string>com.victor.screenshotta</string>
     <key>CFBundleExecutable</key>
-    <string>Screenshotta</string>
+    <string>ScreenOtter</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -47,6 +47,6 @@
         </dict>
     </array>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Screenshotta needs Screen Recording access to take screenshots and record your screen.</string>
+    <string>ScreenOtter needs Screen Recording access to take screenshots and record your screen.</string>
 </dict>
 </plist>

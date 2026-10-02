@@ -13,8 +13,8 @@ struct RecordingInspector: View {
                         Image(systemName: tab.symbol)
                             .font(.system(size: 15, weight: selected ? .semibold : .regular))
                             .frame(width: 36, height: 36)
-                            .foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(selected ? Color.accentColor.opacity(0.18) : .clear))
+                            .foregroundStyle(selected ? Brand.accent : Color.secondary)
+                            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(selected ? Brand.accent.opacity(0.18) : .clear))
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -215,7 +215,7 @@ private struct Swatch<Content: View>: View {
                 .padding(2.5)
                 .overlay(
                     RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2)
+                        .strokeBorder(selected ? Brand.accent : .clear, lineWidth: 2)
                 )
                 .contentShape(Rectangle())
         }
@@ -254,7 +254,7 @@ private struct CursorPanel: View {
                                 }
                                 .frame(width: 54, height: 46)
                                 .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(selected ? 0.14 : 0.06)))
-                                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2))
+                                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(selected ? Brand.accent : .clear, lineWidth: 2))
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
@@ -341,7 +341,7 @@ private struct ClipPanel: View {
                                     .font(.system(size: 12, weight: .semibold))
                                     .monospacedDigit()
                                     .frame(maxWidth: .infinity, minHeight: 28)
-                                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? Color.accentColor : Color.white.opacity(0.07)))
+                                    .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? Brand.accent : Color.white.opacity(0.07)))
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)

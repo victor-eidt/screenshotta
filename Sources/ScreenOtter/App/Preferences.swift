@@ -14,6 +14,32 @@ enum WindowBackground: String, CaseIterable, Identifiable {
     }
 }
 
+/// Where ScreenOtter keeps its data: recordings, shelf history and dropped files.
+nonisolated enum AppFolders {
+    static let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("ScreenOtter", isDirectory: true)
+
+    /// The app used to be called Screenshotta: its data moves over once, on the first launch under the new name.
+    static func migrateFromOldName() {
+        let fileManager = FileManager.default
+        let old = support.deletingLastPathComponent().appendingPathComponent("Screenshotta", isDirectory: true)
+        guard fileManager.fileExists(atPath: old.path), !fileManager.fileExists(atPath: support.path) else { return }
+        do {
+            try fileManager.moveItem(at: old, to: support)
+            // Shelves remember their files by path, and dropped files lived in the old folder.
+            let history = support.appendingPathComponent("Shelves.json")
+            if var text = try? String(contentsOf: history, encoding: .utf8) {
+                for (from, to) in [(old.path, support.path), (old.path.replacingOccurrences(of: "/", with: "\\/"), support.path.replacingOccurrences(of: "/", with: "\\/"))] {
+                    text = text.replacingOccurrences(of: from, with: to)
+                }
+                try text.write(to: history, atomically: true, encoding: .utf8)
+            }
+        } catch {
+            NSLog("ScreenOtter: could not move data from the old app folder: \(error)")
+        }
+    }
+}
+
 final class Preferences: ObservableObject {
     static let shared = Preferences()
 

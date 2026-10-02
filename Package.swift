@@ -2,12 +2,12 @@
 import PackageDescription
 
 let package = Package(
-    name: "Screenshotta",
+    name: "ScreenOtter",
     platforms: [.macOS(.v14)],
     targets: [
         .executableTarget(
-            name: "Screenshotta",
-            path: "Sources/Screenshotta",
+            name: "ScreenOtter",
+            path: "Sources/ScreenOtter",
             swiftSettings: [
                 .defaultIsolation(MainActor.self),
                 .swiftLanguageMode(.v5),

@@ -11,8 +11,7 @@ final class ShelfManager {
 
     private let historyLimit = 20
 
-    private static let supportFolder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Screenshotta", isDirectory: true)
+    private static let supportFolder = AppFolders.support
     private let historyURL = ShelfManager.supportFolder.appendingPathComponent("Shelves.json")
     /// Where images dropped as raw data (not files) are written.
     static let droppedFilesFolder = supportFolder.appendingPathComponent("Dropped Files", isDirectory: true)
@@ -130,7 +129,7 @@ final class ShelfManager {
             try JSONEncoder().encode(history).write(to: historyURL, options: .atomic)
             MenuThumbnail.prefetch(history.compactMap(\.urls.first))
         } catch {
-            NSLog("Screenshotta: could not save shelf history: \(error)")
+            NSLog("ScreenOtter: could not save shelf history: \(error)")
         }
     }
 
