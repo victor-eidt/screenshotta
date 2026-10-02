@@ -46,6 +46,8 @@
             </array>
         </dict>
     </array>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>ScreenOtter records your microphone with screen recordings when you turn it on.</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>ScreenOtter needs Screen Recording access to take screenshots and record your screen.</string>
 </dict>

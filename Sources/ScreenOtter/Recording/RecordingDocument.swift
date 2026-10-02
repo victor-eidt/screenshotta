@@ -3,7 +3,7 @@ import AVFoundation
 import Combine
 
 enum RecordingInspectorTab: String, CaseIterable, Identifiable {
-    case background, cursor, zoom, clip
+    case background, cursor, zoom, clip, audio
 
     var id: String { rawValue }
 
@@ -13,6 +13,7 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .cursor: "Cursor"
         case .zoom: "Zoom"
         case .clip: "Clip"
+        case .audio: "Audio"
         }
     }
 
@@ -22,6 +23,7 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .cursor: "cursorarrow"
         case .zoom: "plus.magnifyingglass"
         case .clip: "film"
+        case .audio: "waveform"
         }
     }
 }
@@ -71,6 +73,8 @@ final class RecordingDocument: ObservableObject {
     @Published private(set) var export: ExportState = .idle
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
+    /// Each audio track's loudness, filled in shortly after opening.
+    @Published private(set) var waveforms: [AudioSource: AudioWaveform] = [:]
 
     private(set) var timeline: ClipTimeline
     /// Kept alive on purpose: a track only weakly references its asset, and once the asset is gone
@@ -79,9 +83,15 @@ final class RecordingDocument: ObservableObject {
     private let sourceTrack: AVAssetTrack
     private let trackDuration: Double
     private let sourceSize: CGSize
+    /// The draft's audio files, loaded (the assets are kept alive for the same reason as `sourceAsset`).
+    private let sourceAudio: [SourceAudio]
+    private let audioAssets: [AVURLAsset]
+    /// The recorded audio tracks that could be loaded, in a fixed order.
+    let audioTracks: [RecordedAudioTrack]
     private let renderer: RecordingRenderer
     /// The cut last built, and the cut the player is showing (they differ while a new item is on its way).
-    private var composition: (segments: [ClipSegment], asset: AVMutableComposition)?
+    private var composition: (segments: [ClipSegment], edited: EditedComposition)?
+    private var mixedWaveform: (key: [Double], waveform: AudioWaveform?)?
     private var playerSegments: [ClipSegment]?
     private var customBackground: (path: String, image: CGImage?)?
     private let firstFrame: CGImage?
@@ -112,6 +122,17 @@ final class RecordingDocument: ObservableObject {
         var edits = project.loadEdits() ?? .initial(duration: duration, clicks: cursor.clicks, style: .lastUsed)
         let wallpaper = CGImageSourceCreateWithURL(project.wallpaperURL as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
 
+        // Audio files that are missing or unreadable are skipped: the video still opens.
+        var audio: [(track: RecordedAudioTrack, asset: AVURLAsset, source: SourceAudio)] = []
+        let recordedTracks = AudioSource.allCases.compactMap { source in metadata.audioTracks.first { $0.source == source } }
+        for recorded in recordedTracks {
+            let audioAsset = AVURLAsset(url: project.url(of: recorded))
+            guard let audioTrack = try? await audioAsset.loadTracks(withMediaType: .audio).first,
+                  let audioDuration = try? await audioAsset.load(.duration).seconds
+            else { continue }
+            audio.append((recorded, audioAsset, SourceAudio(source: recorded.source, track: audioTrack, duration: audioDuration)))
+        }
+
         // Window recordings get a minimal title bar: the first frame shows how tall the app's own top bar is,
         // and what color sits under it.
         var firstFrame: CGImage?
@@ -128,13 +149,15 @@ final class RecordingDocument: ObservableObject {
         }
         return RecordingDocument(
             project: project, metadata: metadata, cursor: cursor, edits: edits, asset: asset, track: track,
-            trackDuration: duration, sourceSize: size, wallpaper: wallpaper, firstFrame: firstFrame
+            trackDuration: duration, sourceSize: size, wallpaper: wallpaper, firstFrame: firstFrame,
+            audio: audio
         )
     }
 
     private init(
         project: RecordingProject, metadata: RecordingMetadata, cursor: CursorRecording, edits: RecordingEdits,
-        asset: AVURLAsset, track: AVAssetTrack, trackDuration: Double, sourceSize: CGSize, wallpaper: CGImage?, firstFrame: CGImage?
+        asset: AVURLAsset, track: AVAssetTrack, trackDuration: Double, sourceSize: CGSize, wallpaper: CGImage?, firstFrame: CGImage?,
+        audio: [(track: RecordedAudioTrack, asset: AVURLAsset, source: SourceAudio)]
     ) {
         self.firstFrame = firstFrame
         self.project = project
@@ -146,6 +169,9 @@ final class RecordingDocument: ObservableObject {
         sourceTrack = track
         self.trackDuration = trackDuration
         self.sourceSize = sourceSize
+        audioTracks = audio.map(\.track)
+        audioAssets = audio.map(\.asset)
+        sourceAudio = audio.map(\.source)
         timeline = ClipTimeline(edits.segments)
         renderer = RecordingRenderer(scene: RenderScene(
             style: edits.style, motion: .empty, pointSize: metadata.pointSize,
@@ -154,6 +180,7 @@ final class RecordingDocument: ObservableObject {
         player.actionAtItemEnd = .pause
         observePlayer()
         refresh()
+        loadWaveforms()
     }
 
     var duration: Double { timeline.duration }
@@ -269,7 +296,14 @@ final class RecordingDocument: ObservableObject {
             currentTime = min(timeline.outputTime(atSource: source), duration)
         }
         if let selection, !isSelectionValid(selection) { self.selection = nil }
-        refresh()
+        var withoutAudio = new
+        withoutAudio.audio = old.audio
+        if withoutAudio == old {
+            // Only the volumes changed: the picture stays as it is.
+            player.currentItem?.audioMix = currentAudioMix()
+        } else {
+            refresh()
+        }
         scheduleSave()
     }
 
@@ -393,25 +427,71 @@ final class RecordingDocument: ObservableObject {
 
         let segments = isInteracting ? (playerSegments ?? edits.segments) : edits.segments
         if composition?.segments != segments {
-            guard let asset = try? RecordingComposition.make(track: sourceTrack, trackDuration: trackDuration, segments: segments) else { return }
-            composition = (segments, asset)
+            guard let edited = try? RecordingComposition.make(
+                track: sourceTrack, trackDuration: trackDuration, segments: segments, audio: sourceAudio
+            ) else { return }
+            composition = (segments, edited)
         }
         guard let composition else { return }
         let needsItem = playerSegments != composition.segments || player.currentItem == nil
         Task {
             guard let videoComposition = try? await RecordingComposition.videoComposition(
-                for: composition.asset, timeline: ClipTimeline(composition.segments), renderer: renderer, renderSize: renderSize
+                for: composition.edited.asset, timeline: ClipTimeline(composition.segments), renderer: renderer, renderSize: renderSize
             ), generation == refreshGeneration
             else { return }
             if needsItem {
-                let item = AVPlayerItem(asset: composition.asset)
+                let item = AVPlayerItem(asset: composition.edited.asset)
                 item.videoComposition = videoComposition
+                item.audioMix = currentAudioMix()
+                item.audioTimePitchAlgorithm = RecordingComposition.pitchAlgorithm
                 player.replaceCurrentItem(with: item)
                 playerSegments = composition.segments
             } else {
                 player.currentItem?.videoComposition = videoComposition
             }
             if !isPlaying { seek(to: currentTime) }
+        }
+    }
+
+    // MARK: - Audio
+
+    var audioSources: [AudioSource] { audioTracks.map(\.source) }
+
+    func audioMix(for source: AudioSource) -> AudioTrackMix {
+        edits.audioMix(for: source, alongside: audioSources)
+    }
+
+    func setAudioMix(_ source: AudioSource, _ change: (inout AudioTrackMix) -> Void) {
+        var mix = audioMix(for: source)
+        change(&mix)
+        update { edits in
+            var all = edits.audio ?? [:]
+            all[source] = mix
+            edits.audio = all
+        }
+    }
+
+    private func currentAudioMix() -> AVAudioMix? {
+        guard let composition else { return nil }
+        return RecordingComposition.audioMix(composition.edited) { self.audioMix(for: $0).effectiveVolume }
+    }
+
+    /// What the timeline draws: every track at its volume, nil when nothing is audible.
+    var audibleWaveform: AudioWaveform? {
+        let volumes = audioSources.map { waveforms[$0] == nil ? -1 : audioMix(for: $0).effectiveVolume }
+        if let cached = mixedWaveform, cached.key == volumes { return cached.waveform }
+        let tracks = audioSources.compactMap { source in waveforms[source].map { ($0, audioMix(for: source).effectiveVolume) } }
+        let waveform = tracks.contains { $0.1 > 0 } ? AudioWaveform.mixed(tracks) : nil
+        mixedWaveform = (volumes, waveform)
+        return waveform
+    }
+
+    private func loadWaveforms() {
+        for track in audioTracks {
+            let url = project.url(of: track)
+            Task {
+                if let waveform = await AudioWaveform.load(url) { waveforms[track.source] = waveform }
+            }
         }
     }
 
@@ -542,13 +622,17 @@ final class RecordingDocument: ObservableObject {
         let url = Self.exportURL(named: metadata.title)
         // A frozen copy of the edits: changing things while exporting doesn't affect the file.
         let exportRenderer = RecordingRenderer(scene: renderer.currentScene)
+        let volumes = Dictionary(uniqueKeysWithValues: audioSources.map { ($0, audioMix(for: $0).effectiveVolume) })
+        let volume: (AudioSource) -> Double = { volumes[$0] ?? 0 }
+        let asset = RecordingComposition.exportAsset(composition.edited, volume: volume)
+        let audioMix = RecordingComposition.audioMix(composition.edited, volume: volume)
         export = .exporting(0)
         Task {
             do {
                 let videoComposition = try await RecordingComposition.videoComposition(
-                    for: composition.asset, timeline: ClipTimeline(composition.segments), renderer: exportRenderer, renderSize: size
+                    for: asset, timeline: ClipTimeline(composition.segments), renderer: exportRenderer, renderSize: size
                 )
-                try await RecordingComposition.export(composition.asset, videoComposition: videoComposition, to: url) { progress in
+                try await RecordingComposition.export(asset, videoComposition: videoComposition, audioMix: audioMix, to: url) { progress in
                     Task { @MainActor in
                         guard case .exporting = self.export else { return }
                         self.export = .exporting(progress)

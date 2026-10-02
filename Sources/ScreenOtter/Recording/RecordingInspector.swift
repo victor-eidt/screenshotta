@@ -34,6 +34,7 @@ struct RecordingInspector: View {
                     case .cursor: CursorPanel(doc: doc)
                     case .zoom: ZoomPanel(doc: doc)
                     case .clip: ClipPanel(doc: doc)
+                    case .audio: AudioPanel(doc: doc)
                     }
                 }
                 .padding(18)
@@ -367,6 +368,89 @@ private struct ClipPanel: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+// MARK: - Audio
+
+private struct AudioPanel: View {
+    @ObservedObject var doc: RecordingDocument
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            if doc.audioTracks.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Image(systemName: "speaker.slash")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("No audio in this recording")
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Text("Turn on the microphone or system audio in the bar at the bottom of the screen when you choose what to record, or in Settings › Recording.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                ForEach(doc.audioTracks, id: \.source) { track in
+                    AudioTrackRow(doc: doc, track: track)
+                }
+                Text("Sound follows your trims, cuts and speed changes, and voices keep their pitch when a clip is sped up.")
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+private struct AudioTrackRow: View {
+    @ObservedObject var doc: RecordingDocument
+    let track: RecordedAudioTrack
+
+    var body: some View {
+        let mix = doc.audioMix(for: track.source)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: track.source.symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(mix.isMuted ? Color.secondary : Color.white)
+                    .frame(width: 28, height: 28)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(mix.isMuted ? Color.white.opacity(0.08) : Brand.accent))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(track.source.title).font(.system(size: 12.5, weight: .semibold))
+                    if let name = track.deviceName {
+                        Text(name)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                Spacer(minLength: 6)
+                Button {
+                    doc.setAudioMix(track.source) { $0.isMuted.toggle() }
+                } label: {
+                    Image(systemName: mix.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(mix.isMuted ? Color.orange : Color.secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(Color.white.opacity(0.07)))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(mix.isMuted ? "Unmute" : "Mute")
+                .accessibilityLabel(mix.isMuted ? "Unmute \(track.source.title)" : "Mute \(track.source.title)")
+            }
+            InspectorSlider(
+                title: "Volume",
+                value: Binding(get: { mix.volume }, set: { volume in doc.setAudioMix(track.source) { $0.volume = volume; $0.isMuted = false } }),
+                range: 0...1,
+                format: { "\(Int(($0 * 100).rounded()))%" },
+                onEditing: doc.sliderEditing
+            )
+            .opacity(mix.isMuted ? 0.45 : 1)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.05)))
     }
 }
 

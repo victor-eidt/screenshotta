@@ -90,6 +90,9 @@ final class RecordingController: ObservableObject {
                 try? CaptureOutput.write(wallpaper, scale: 1, to: project.wallpaperURL)
             }
 
+            // Asks for the microphone now (the first time), before the countdown, rather than mid-recording.
+            let audio = await AudioCaptureOptions.current()
+
             if Preferences.shared.recordingCountdown {
                 state = .countingDown
                 guard await countdown(at: setup.countdownCenter) else {
@@ -99,7 +102,10 @@ final class RecordingController: ObservableObject {
                 }
             }
 
-            let recorder = try ScreenRecorder(filter: setup.filter, configuration: setup.configuration, outputURL: project.videoURL, alpha: setup.alpha)
+            let recorder = try ScreenRecorder(
+                filter: setup.filter, configuration: setup.configuration, outputURL: project.videoURL, alpha: setup.alpha,
+                audio: audio, audioURL: project.audioURL
+            )
             recorder.onFailure = { _ in
                 Task { @MainActor in RecordingController.shared.stop() }
             }
@@ -266,6 +272,7 @@ final class RecordingController: ObservableObject {
                 let cursor = session.tracker.stop(start: result.startHostTime, duration: result.duration)
                 var metadata = session.metadata
                 metadata.duration = result.duration
+                metadata.audio = result.audio
                 try session.project.save(metadata)
                 try session.project.save(cursor)
                 try session.project.save(RecordingEdits.initial(duration: result.duration, clicks: cursor.clicks, style: .lastUsed))

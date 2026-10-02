@@ -12,29 +12,90 @@ nonisolated enum RecordingCompositionError: LocalizedError {
     }
 }
 
-/// Builds the edited video: the kept clips back to back at their speeds, drawn through the renderer.
+/// The edited recording as one asset, with the composition track each audio source plays on.
+nonisolated struct EditedComposition: @unchecked Sendable {
+    let asset: AVMutableComposition
+    let audioTrackIDs: [AudioSource: CMPersistentTrackID]
+}
+
+/// An audio file of the draft, loaded.
+nonisolated struct SourceAudio: @unchecked Sendable {
+    let source: AudioSource
+    let track: AVAssetTrack
+    let duration: Double
+}
+
+/// Builds the edited video: the kept clips back to back at their speeds, drawn through the renderer,
+/// with each audio file cut the same way.
 nonisolated enum RecordingComposition {
     private static let timescale: CMTimeScale = 6000
+    /// Clips shorter than this (seconds) are left out.
+    static let minimumClip = 0.01
+    /// Keeps voices at their pitch when a clip is sped up or slowed down.
+    static let pitchAlgorithm = AVAudioTimePitchAlgorithm.spectral
 
-    static func make(track: AVAssetTrack, trackDuration: Double, segments: [ClipSegment]) throws -> AVMutableComposition {
+    static func make(track: AVAssetTrack, trackDuration: Double, segments: [ClipSegment], audio: [SourceAudio] = []) throws -> EditedComposition {
         let composition = AVMutableComposition()
         guard let video = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
             throw RecordingCompositionError.noVideo
         }
-        var cursor = CMTime.zero
-        for segment in segments {
-            let start = CMTime(seconds: min(segment.start, trackDuration), preferredTimescale: timescale)
-            let end = CMTime(seconds: min(segment.end, trackDuration), preferredTimescale: timescale)
-            let range = CMTimeRange(start: start, end: end)
-            guard range.duration.seconds > 0.01 else { continue }
-            try video.insertTimeRange(range, of: track, at: cursor)
-            let scaled = CMTime(seconds: range.duration.seconds / segment.speed, preferredTimescale: timescale)
-            if segment.speed != 1 {
-                video.scaleTimeRange(CMTimeRange(start: cursor, duration: range.duration), toDuration: scaled)
-            }
-            cursor = cursor + scaled
+        try lay(ClipTimeMapping.pieces(segments: segments, videoDuration: trackDuration, fileDuration: trackDuration), of: track, on: video)
+
+        var audioTrackIDs: [AudioSource: CMPersistentTrackID] = [:]
+        for source in audio {
+            let pieces = ClipTimeMapping.pieces(segments: segments, videoDuration: trackDuration, fileDuration: source.duration)
+            guard !pieces.isEmpty,
+                  let track = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+            else { continue }
+            try lay(pieces, of: source.track, on: track)
+            audioTrackIDs[source.source] = track.trackID
         }
-        return composition
+        return EditedComposition(asset: composition, audioTrackIDs: audioTrackIDs)
+    }
+
+    /// Inserts each piece of `source` at its place in the edited video, at its speed.
+    private static func lay(_ pieces: [ClipTimeMapping.Piece], of source: AVAssetTrack, on track: AVMutableCompositionTrack) throws {
+        var end = CMTime.zero
+        for piece in pieces {
+            let at = CMTime(seconds: piece.outputStart, preferredTimescale: timescale)
+            // Where a file starts after the clip does (sound that began late), the gap stays empty.
+            if at > end { track.insertEmptyTimeRange(CMTimeRange(start: end, end: at)) }
+            let range = CMTimeRange(
+                start: CMTime(seconds: piece.fileStart, preferredTimescale: timescale),
+                end: CMTime(seconds: piece.fileEnd, preferredTimescale: timescale)
+            )
+            // Pieces follow each other; rounding never leaves a gap or overlap between them.
+            let start = max(at, end)
+            try track.insertTimeRange(range, of: source, at: start)
+            let scaled = CMTime(seconds: piece.outputDuration, preferredTimescale: timescale)
+            if piece.speed != 1 {
+                track.scaleTimeRange(CMTimeRange(start: start, duration: range.duration), toDuration: scaled)
+            }
+            end = start + scaled
+        }
+    }
+
+    /// Each source's volume (and mute) applied to its track.
+    static func audioMix(_ composition: EditedComposition, volume: (AudioSource) -> Double) -> AVAudioMix {
+        let mix = AVMutableAudioMix()
+        mix.inputParameters = composition.audioTrackIDs.map { source, trackID in
+            let parameters = AVMutableAudioMixInputParameters()
+            parameters.trackID = trackID
+            parameters.audioTimePitchAlgorithm = pitchAlgorithm
+            parameters.setVolume(Float(volume(source)), at: .zero)
+            return parameters
+        }
+        return mix
+    }
+
+    /// The asset to export: tracks that would only add silence are left out.
+    static func exportAsset(_ composition: EditedComposition, volume: (AudioSource) -> Double) -> AVAsset {
+        let silent = composition.audioTrackIDs.filter { volume($0.key) <= 0 }.map(\.value)
+        guard !silent.isEmpty, let copy = composition.asset.mutableCopy() as? AVMutableComposition else { return composition.asset }
+        for trackID in silent {
+            if let track = copy.track(withTrackID: trackID) { copy.removeTrack(track) }
+        }
+        return copy
     }
 
     /// `timeline` describes the cut in `asset`: frames are drawn with the pointer and camera of exactly that cut.
@@ -53,10 +114,11 @@ nonisolated enum RecordingComposition {
         }
     }
 
-    /// Writes an H.264 MP4. `progress` is called from a background task.
+    /// Writes an H.264 MP4, with the sound mixed down to AAC. `progress` is called from a background task.
     static func export(
         _ asset: AVAsset,
         videoComposition: AVVideoComposition,
+        audioMix: AVAudioMix?,
         to url: URL,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
@@ -65,6 +127,8 @@ nonisolated enum RecordingComposition {
             throw RecordingCompositionError.exportFailed
         }
         session.videoComposition = videoComposition
+        session.audioMix = audioMix
+        session.audioTimePitchAlgorithm = pitchAlgorithm
         session.shouldOptimizeForNetworkUse = true
 
         if #available(macOS 15, *) {

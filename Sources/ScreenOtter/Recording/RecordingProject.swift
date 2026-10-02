@@ -15,6 +15,12 @@ nonisolated struct RecordingMetadata: Codable, Sendable {
     /// Video pixels per point.
     var scale: CGFloat
     var duration: Double
+    /// Sound recorded alongside, one file per source. Missing in recordings made before audio existed:
+    /// optional, so the synthesized decoding still reads them.
+    var audio: [RecordedAudioTrack]?
+
+    /// The audio tracks, none when the recording has no sound.
+    var audioTracks: [RecordedAudioTrack] { audio ?? [] }
 }
 
 /// Pointer positions in points, relative to the recorded content's top-left corner.
@@ -172,6 +178,8 @@ nonisolated struct RecordingEdits: Codable, Equatable, Sendable {
     /// Points cut from the left and right edges.
     var cutLeft: Double?
     var cutRight: Double?
+    /// Volume and mute per audio source. Missing until a track is first changed.
+    var audio: [AudioSource: AudioTrackMix]?
 
     static func initial(duration: Double, clicks: [CursorRecording.Sample], style: RecordingStyle) -> RecordingEdits {
         var edits = RecordingEdits(segments: [ClipSegment(start: 0, end: duration)], zooms: [], style: style)
@@ -191,6 +199,9 @@ nonisolated struct RecordingProject: Sendable {
     var cursorURL: URL { folder.appendingPathComponent("cursor.json") }
     var editsURL: URL { folder.appendingPathComponent("edits.json") }
     var wallpaperURL: URL { folder.appendingPathComponent("wallpaper.png") }
+
+    func audioURL(_ source: AudioSource) -> URL { folder.appendingPathComponent(source.fileName) }
+    func url(of track: RecordedAudioTrack) -> URL { folder.appendingPathComponent(track.file) }
 
     static var libraryFolder: URL {
         AppFolders.support.appendingPathComponent("Recordings", isDirectory: true)

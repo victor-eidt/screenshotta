@@ -43,6 +43,7 @@ final class SelectionController {
         if isActive {
             if self.purpose != purpose {
                 self.purpose = purpose
+                updateOptionsBar()
                 redrawAll()
             }
             if self.mode != mode { toggleMode() }
@@ -75,6 +76,12 @@ final class SelectionController {
 
         updateHover(at: mouse)
         applyCursor()
+        updateOptionsBar()
+    }
+
+    /// Recording shows its audio options at the bottom of the screen with the pointer.
+    private func updateOptionsBar() {
+        if purpose == .recording { RecordingOptionsBar.shared.show() } else { RecordingOptionsBar.shared.hide() }
     }
 
     func toggleMode() {
@@ -98,6 +105,7 @@ final class SelectionController {
     }
 
     func updateHover(at point: CGPoint) {
+        if purpose == .recording { RecordingOptionsBar.shared.follow(point) }
         guard mode == .window else { return }
         hovered = candidates.first { $0.frame.contains(point) }
     }
@@ -158,6 +166,7 @@ final class SelectionController {
         HotKeyManager.shared.unregister(.space)
         panels.forEach { $0.orderOut(nil) }
         panels.removeAll()
+        RecordingOptionsBar.shared.hide()
         hovered = nil
         NSCursor.arrow.set()
     }

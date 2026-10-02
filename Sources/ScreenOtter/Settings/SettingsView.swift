@@ -604,6 +604,8 @@ private struct RecordingPane: View {
                 ToggleRow(title: "Count down before recording", detail: "3, 2, 1 in the middle of what's being recorded. Esc cancels.", isOn: $prefs.recordingCountdown)
             }
 
+            RecordingAudioSection()
+
             SettingsSection("Drafts", footer: "Every recording is a draft: edits save as you go. Reopen, rename, duplicate or trash them from the Drafts window.") {
                 SettingsRow(drafts.drafts.isEmpty ? "No drafts yet" : "\(drafts.drafts.count) draft\(drafts.drafts.count == 1 ? "" : "s")") {
                     Button("Open Drafts") { DraftsWindowController.shared.show() }
@@ -619,6 +621,8 @@ private struct RecordingPane: View {
                 FeatureRow(symbol: "plus.magnifyingglass", title: "Auto zoom", detail: "Eases in where you click and follows the pointer.")
                 RowDivider()
                 FeatureRow(symbol: "scissors", title: "Clips & speed", detail: "Trim, split, cut the sides and change the speed of each clip.")
+                RowDivider()
+                FeatureRow(symbol: "waveform", title: "Audio", detail: "Microphone and system audio on their own tracks, with volume and mute.")
             }
         }
         .onAppear { drafts.reload() }
@@ -744,6 +748,53 @@ private struct ShortcutRow: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .frame(minHeight: 50)
+    }
+}
+
+/// Microphone and system audio, also offered in the bar at the bottom of the screen when choosing what to record.
+private struct RecordingAudioSection: View {
+    @ObservedObject private var prefs = Preferences.shared
+    @State private var microphones: [Microphones.Device] = []
+    @State private var denied = Microphones.isDenied
+
+    var body: some View {
+        SettingsSection("Audio", footer: "Each source is saved as its own track, so its volume can be changed or muted in the editor.") {
+            ToggleRow(title: "Microphone", detail: "Records your voice with the screen.", isOn: Binding(
+                get: { prefs.recordMicrophone },
+                set: { on in
+                    prefs.recordMicrophone = on
+                    if on { Task { _ = await Microphones.requestAccess(); denied = Microphones.isDenied } }
+                }
+            ))
+            if prefs.recordMicrophone {
+                RowDivider()
+                if denied {
+                    SettingsRow("Microphone access is off", detail: "Recordings go on without it until it's allowed.") {
+                        Button("Open Settings") { Microphones.openPrivacySettings() }
+                            .buttonStyle(.soft)
+                    }
+                } else {
+                    SettingsRow("Input") {
+                        // A saved microphone that's unplugged shows as System Default, which is what records; it's kept for when it's back.
+                        Picker("", selection: Binding(
+                            get: { microphones.contains { $0.id == prefs.microphoneID } ? prefs.microphoneID ?? "" : "" },
+                            set: { prefs.microphoneID = $0.isEmpty ? nil : $0 }
+                        )) {
+                            Text("System Default").tag("")
+                            ForEach(microphones) { Text($0.name).tag($0.id) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                }
+            }
+            RowDivider()
+            ToggleRow(title: "System audio", detail: "Sound from your apps. ScreenOtter's own sounds are left out.", isOn: $prefs.recordSystemAudio)
+        }
+        .onAppear {
+            microphones = Microphones.all()
+            denied = Microphones.isDenied
+        }
     }
 }
 
