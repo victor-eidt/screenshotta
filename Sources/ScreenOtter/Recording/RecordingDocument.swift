@@ -3,7 +3,7 @@ import AVFoundation
 import Combine
 
 enum RecordingInspectorTab: String, CaseIterable, Identifiable {
-    case background, cursor, zoom, clip, audio
+    case background, cursor, zoom, clip, audio, webcam
 
     var id: String { rawValue }
 
@@ -14,6 +14,7 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .zoom: "Zoom"
         case .clip: "Clip"
         case .audio: "Audio"
+        case .webcam: "Camera"
         }
     }
 
@@ -24,6 +25,7 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .zoom: "plus.magnifyingglass"
         case .clip: "film"
         case .audio: "waveform"
+        case .webcam: "person.crop.square"
         }
     }
 }
@@ -88,6 +90,9 @@ final class RecordingDocument: ObservableObject {
     private let audioAssets: [AVURLAsset]
     /// The recorded audio tracks that could be loaded, in a fixed order.
     let audioTracks: [RecordedAudioTrack]
+    /// The draft's camera file, loaded, and its asset kept alive like `sourceAsset`.
+    private let sourceWebcam: SourceWebcam?
+    private let webcamAsset: AVURLAsset?
     private let renderer: RecordingRenderer
     /// The cut last built, and the cut the player is showing (they differ while a new item is on its way).
     private var composition: (segments: [ClipSegment], edited: EditedComposition)?
@@ -133,6 +138,16 @@ final class RecordingDocument: ObservableObject {
             audio.append((recorded, audioAsset, SourceAudio(source: recorded.source, track: audioTrack, duration: audioDuration)))
         }
 
+        // Likewise the camera: without its file the video opens without the bubble.
+        var webcam: (asset: AVURLAsset, source: SourceWebcam)?
+        if let recorded = metadata.webcam {
+            let webcamAsset = AVURLAsset(url: project.url(of: recorded))
+            if let webcamTrack = try? await webcamAsset.loadTracks(withMediaType: .video).first,
+               let webcamDuration = try? await webcamAsset.load(.duration).seconds {
+                webcam = (webcamAsset, SourceWebcam(track: webcamTrack, duration: webcamDuration, offset: recorded.offset))
+            }
+        }
+
         // Window recordings get a minimal title bar: the first frame shows how tall the app's own top bar is,
         // and what color sits under it.
         var firstFrame: CGImage?
@@ -150,14 +165,15 @@ final class RecordingDocument: ObservableObject {
         return RecordingDocument(
             project: project, metadata: metadata, cursor: cursor, edits: edits, asset: asset, track: track,
             trackDuration: duration, sourceSize: size, wallpaper: wallpaper, firstFrame: firstFrame,
-            audio: audio
+            audio: audio, webcam: webcam
         )
     }
 
     private init(
         project: RecordingProject, metadata: RecordingMetadata, cursor: CursorRecording, edits: RecordingEdits,
         asset: AVURLAsset, track: AVAssetTrack, trackDuration: Double, sourceSize: CGSize, wallpaper: CGImage?, firstFrame: CGImage?,
-        audio: [(track: RecordedAudioTrack, asset: AVURLAsset, source: SourceAudio)]
+        audio: [(track: RecordedAudioTrack, asset: AVURLAsset, source: SourceAudio)],
+        webcam: (asset: AVURLAsset, source: SourceWebcam)?
     ) {
         self.firstFrame = firstFrame
         self.project = project
@@ -172,6 +188,8 @@ final class RecordingDocument: ObservableObject {
         audioTracks = audio.map(\.track)
         audioAssets = audio.map(\.asset)
         sourceAudio = audio.map(\.source)
+        webcamAsset = webcam?.asset
+        sourceWebcam = webcam?.source
         timeline = ClipTimeline(edits.segments)
         renderer = RecordingRenderer(scene: RenderScene(
             style: edits.style, motion: .empty, pointSize: metadata.pointSize,
@@ -347,7 +365,7 @@ final class RecordingDocument: ObservableObject {
         return RenderScene(
             style: style, motion: motion, pointSize: metadata.pointSize,
             sourceSize: sourceSize, wallpaper: wallpaper, customBackground: loadCustomBackground(style.background),
-            frame: frame
+            frame: frame, webcam: showsWebcam ? style.webcam : nil
         )
     }
 
@@ -428,7 +446,7 @@ final class RecordingDocument: ObservableObject {
         let segments = isInteracting ? (playerSegments ?? edits.segments) : edits.segments
         if composition?.segments != segments {
             guard let edited = try? RecordingComposition.make(
-                track: sourceTrack, trackDuration: trackDuration, segments: segments, audio: sourceAudio
+                track: sourceTrack, trackDuration: trackDuration, segments: segments, audio: sourceAudio, webcam: sourceWebcam
             ) else { return }
             composition = (segments, edited)
         }
@@ -436,7 +454,8 @@ final class RecordingDocument: ObservableObject {
         let needsItem = playerSegments != composition.segments || player.currentItem == nil
         Task {
             guard let videoComposition = try? await RecordingComposition.videoComposition(
-                for: composition.edited.asset, timeline: ClipTimeline(composition.segments), renderer: renderer, renderSize: renderSize
+                for: composition.edited.asset, composition: composition.edited, timeline: ClipTimeline(composition.segments),
+                renderer: renderer, renderSize: renderSize
             ), generation == refreshGeneration
             else { return }
             if needsItem {
@@ -493,6 +512,47 @@ final class RecordingDocument: ObservableObject {
                 if let waveform = await AudioWaveform.load(url) { waveforms[track.source] = waveform }
             }
         }
+    }
+
+    // MARK: - Webcam
+
+    /// The recording has a camera file that could be loaded.
+    var hasWebcam: Bool { sourceWebcam != nil }
+
+    /// The bubble is drawn: there's a camera, and it isn't turned off for this video.
+    var showsWebcam: Bool { hasWebcam && edits.webcamHidden != true }
+
+    var webcamDeviceName: String? { metadata.webcam?.deviceName }
+
+    func setWebcamVisible(_ visible: Bool) {
+        update { $0.webcamHidden = visible ? nil : true }
+    }
+
+    /// The bubble's frame in the preview, in top-left-origin units of `size` (the player's on-screen size),
+    /// at rest and at the current moment (smaller while zoomed in). Nil while it isn't drawn, including while
+    /// it's faded out for a zoom, so there's nothing invisible to hover or drag.
+    func webcamFrame(in size: CGSize) -> (rest: CGRect, now: CGRect)? {
+        guard showsWebcam, size.width > 0 else { return nil }
+        let canvas = previewSize
+        let k = size.width / canvas.width
+        let style = edits.style.webcam
+        let zoom = motion.camera(at: timeline.sourceTime(atOutput: currentTime)).scale
+        let now = WebcamLayout.presentation(style, canvas: canvas, zoomScale: zoom)
+        guard WebcamLayout.isGrabbable(opacity: now.opacity) else { return nil }
+        let rest = WebcamLayout.frame(style, canvas: canvas)
+        func scaled(_ r: CGRect) -> CGRect { CGRect(x: r.minX * k, y: r.minY * k, width: r.width * k, height: r.height * k) }
+        return (scaled(rest), scaled(now.frame))
+    }
+
+    /// Moves the bubble so its resting top-left corner is at `origin` (preview units of `size`).
+    /// `snap` pulls it into a corner when it's dropped close to one.
+    func moveWebcam(origin: CGPoint, in size: CGSize, snap: Bool) {
+        guard size.width > 0 else { return }
+        let canvas = previewSize
+        let k = canvas.width / size.width
+        var position = WebcamLayout.position(origin: CGPoint(x: origin.x * k, y: origin.y * k), style: edits.style.webcam, canvas: canvas)
+        if snap { position = WebcamLayout.snapped(position) }
+        update { $0.style.webcam.x = position.x; $0.style.webcam.y = position.y }
     }
 
     // MARK: - Clips
@@ -630,7 +690,8 @@ final class RecordingDocument: ObservableObject {
         Task {
             do {
                 let videoComposition = try await RecordingComposition.videoComposition(
-                    for: asset, timeline: ClipTimeline(composition.segments), renderer: exportRenderer, renderSize: size
+                    for: asset, composition: composition.edited, timeline: ClipTimeline(composition.segments),
+                    renderer: exportRenderer, renderSize: size
                 )
                 try await RecordingComposition.export(asset, videoComposition: videoComposition, audioMix: audioMix, to: url) { progress in
                     Task { @MainActor in

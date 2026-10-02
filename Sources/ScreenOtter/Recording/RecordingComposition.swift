@@ -16,6 +16,9 @@ nonisolated enum RecordingCompositionError: LocalizedError {
 nonisolated struct EditedComposition: @unchecked Sendable {
     let asset: AVMutableComposition
     let audioTrackIDs: [AudioSource: CMPersistentTrackID]
+    let videoTrackID: CMPersistentTrackID
+    /// The camera, cut like the screen, when the recording has one.
+    var webcamTrackID: CMPersistentTrackID?
 }
 
 /// An audio file of the draft, loaded.
@@ -23,6 +26,14 @@ nonisolated struct SourceAudio: @unchecked Sendable {
     let source: AudioSource
     let track: AVAssetTrack
     let duration: Double
+}
+
+/// The draft's camera file, loaded.
+nonisolated struct SourceWebcam: @unchecked Sendable {
+    let track: AVAssetTrack
+    let duration: Double
+    /// Recording seconds at the file's first frame.
+    let offset: Double
 }
 
 /// Builds the edited video: the kept clips back to back at their speeds, drawn through the renderer,
@@ -34,7 +45,9 @@ nonisolated enum RecordingComposition {
     /// Keeps voices at their pitch when a clip is sped up or slowed down.
     static let pitchAlgorithm = AVAudioTimePitchAlgorithm.spectral
 
-    static func make(track: AVAssetTrack, trackDuration: Double, segments: [ClipSegment], audio: [SourceAudio] = []) throws -> EditedComposition {
+    static func make(
+        track: AVAssetTrack, trackDuration: Double, segments: [ClipSegment], audio: [SourceAudio] = [], webcam: SourceWebcam? = nil
+    ) throws -> EditedComposition {
         let composition = AVMutableComposition()
         guard let video = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
             throw RecordingCompositionError.noVideo
@@ -50,7 +63,22 @@ nonisolated enum RecordingComposition {
             try lay(pieces, of: source.track, on: track)
             audioTrackIDs[source.source] = track.trackID
         }
-        return EditedComposition(asset: composition, audioTrackIDs: audioTrackIDs)
+
+        // The camera is cut from the same pieces, shifted by when it started, so it stays on the screen's clock.
+        var webcamTrackID: CMPersistentTrackID?
+        if let webcam {
+            let pieces = ClipTimeMapping.pieces(segments: segments, videoDuration: trackDuration, fileDuration: webcam.duration, fileOffset: webcam.offset)
+            if !pieces.isEmpty, let track = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) {
+                do {
+                    try lay(pieces, of: webcam.track, on: track)
+                    webcamTrackID = track.trackID
+                } catch {
+                    // The video still plays without its bubble.
+                    composition.removeTrack(track)
+                }
+            }
+        }
+        return EditedComposition(asset: composition, audioTrackIDs: audioTrackIDs, videoTrackID: video.trackID, webcamTrackID: webcamTrackID)
     }
 
     /// Inserts each piece of `source` at its place in the edited video, at its speed.
@@ -99,19 +127,24 @@ nonisolated enum RecordingComposition {
     }
 
     /// `timeline` describes the cut in `asset`: frames are drawn with the pointer and camera of exactly that cut.
-    static func videoComposition(for asset: AVAsset, timeline: ClipTimeline, renderer: RecordingRenderer, renderSize: CGSize) async throws -> AVVideoComposition {
-        let composition = try await AVMutableVideoComposition.videoComposition(with: asset, applyingCIFiltersWithHandler: handler(renderer, timeline: timeline))
+    /// `composition` names the tracks: the screen, and the webcam when there is one.
+    static func videoComposition(
+        for asset: AVAsset, composition edited: EditedComposition, timeline: ClipTimeline, renderer: RecordingRenderer, renderSize: CGSize
+    ) async throws -> AVVideoComposition {
+        let duration = try await asset.load(.duration)
+        // The export asset is a copy of the edited one, with the same track IDs.
+        var webcamTrackID: CMPersistentTrackID?
+        if let id = edited.webcamTrackID, try await asset.loadTrack(withTrackID: id) != nil { webcamTrackID = id }
+        let composition = AVMutableVideoComposition()
+        composition.customVideoCompositorClass = RecordingCompositor.self
+        composition.instructions = [RecordingCompositionInstruction(
+            timeRange: CMTimeRange(start: .zero, duration: duration),
+            videoTrackID: edited.videoTrackID, webcamTrackID: webcamTrackID, renderer: renderer, timeline: timeline
+        )]
         composition.renderSize = renderSize
         // A steady 60 fps even where the screen (and so the recording) stood still: the pointer and camera keep moving.
         composition.frameDuration = CMTime(value: 1, timescale: 60)
         return composition
-    }
-
-    private static func handler(_ renderer: RecordingRenderer, timeline: ClipTimeline) -> @Sendable (AVAsynchronousCIImageFilteringRequest) -> Void {
-        { request in
-            let image = renderer.render(source: request.sourceImage, outputTime: request.compositionTime.seconds, timeline: timeline, renderSize: request.renderSize)
-            request.finish(with: image, context: RecordingRenderer.context)
-        }
     }
 
     /// Writes an H.264 MP4, with the sound mixed down to AAC. `progress` is called from a background task.

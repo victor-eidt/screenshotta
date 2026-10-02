@@ -12,6 +12,8 @@ nonisolated struct RenderScene: @unchecked Sendable {
     var wallpaper: CGImage?
     var customBackground: CGImage?
     var frame: RecordingFrame?
+    /// The webcam bubble's look, or nil when there's no bubble to draw.
+    var webcam: WebcamStyle?
 
     /// The recording as framed: cut at the sides, and with its title bar replaced.
     var contentSize: CGSize { frame?.size(of: sourceSize) ?? sourceSize }
@@ -52,7 +54,8 @@ nonisolated struct RecordingFrame: @unchecked Sendable {
     }
 }
 
-/// Draws one output frame: background, shadow, the rounded recording, pointer, clicks, then the camera on top.
+/// Draws one output frame: background, shadow, the rounded recording, pointer, clicks, then the camera on top,
+/// and the webcam bubble over everything (it doesn't zoom with the picture).
 /// Called by AVFoundation on its own threads, for playback and for export alike.
 nonisolated final class RecordingRenderer: @unchecked Sendable {
     static let context = CIContext(options: [.cacheIntermediates: false])
@@ -106,7 +109,7 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
 
     /// `timeline` is the cut of the video being drawn, which may lag behind the latest edits for a moment:
     /// the pointer and camera must follow the frames actually on screen.
-    func render(source: CIImage, outputTime: Double, timeline: ClipTimeline, renderSize: CGSize) -> CIImage {
+    func render(source: CIImage, webcam: CIImage? = nil, outputTime: Double, timeline: ClipTimeline, renderSize: CGSize) -> CIImage {
         let scene = currentScene
         let style = scene.style
         let t = timeline.sourceTime(atOutput: outputTime)
@@ -135,7 +138,12 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
         }
         // The camera works in the framed recording already.
         let focus = CGPoint(x: rect.minX + camera.x * rect.width, y: rect.maxY - camera.y * rect.height)
-        return applyCamera(camera, focus: focus, to: image, size: renderSize)
+        image = applyCamera(camera, focus: focus, to: image, size: renderSize)
+        if let webcam, let style = scene.webcam,
+           let bubble = WebcamArt.bubble(camera: webcam, style: style, canvas: renderSize, zoomScale: camera.scale) {
+            image = bubble.composited(over: image).cropped(to: CGRect(origin: .zero, size: renderSize))
+        }
+        return image
     }
 
     /// The video frame cut at its edges and with its title bar replaced, when framed; origin at zero either way.

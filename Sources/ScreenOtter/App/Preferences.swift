@@ -64,6 +64,8 @@ final class Preferences: ObservableObject {
         static let recordMicrophone = "recordMicrophone"
         static let microphoneID = "microphoneID"
         static let recordSystemAudio = "recordSystemAudio"
+        static let recordCamera = "recordCamera"
+        static let cameraID = "cameraID"
     }
 
     static let defaultFolder = FileManager.default
@@ -89,6 +91,9 @@ final class Preferences: ObservableObject {
     /// The microphone's unique ID; nil follows the system's input device.
     @Published var microphoneID: String? { didSet { defaults.set(microphoneID, forKey: Key.microphoneID) } }
     @Published var recordSystemAudio: Bool { didSet { defaults.set(recordSystemAudio, forKey: Key.recordSystemAudio) } }
+    @Published var recordCamera: Bool { didSet { defaults.set(recordCamera, forKey: Key.recordCamera) } }
+    /// The camera's unique ID; nil follows the system's default camera.
+    @Published var cameraID: String? { didSet { defaults.set(cameraID, forKey: Key.cameraID) } }
 
     @Published var shakeToOpenShelf: Bool {
         didSet {
@@ -157,6 +162,8 @@ final class Preferences: ObservableObject {
         // Off until asked for: no permission prompt and no sound in a recording nobody expected.
         recordMicrophone = defaults.bool(forKey: Key.recordMicrophone)
         recordSystemAudio = defaults.bool(forKey: Key.recordSystemAudio)
+        recordCamera = defaults.bool(forKey: Key.recordCamera)
+        _cameraID = Published(initialValue: defaults.string(forKey: Key.cameraID))
         _microphoneID = Published(initialValue: defaults.string(forKey: Key.microphoneID))
         // Optionals are already initialized to nil, so a plain assignment here would run didSet.
         _areaShortcut = Published(initialValue: Self.loadShortcut(Key.areaShortcut, from: defaults, default: .defaultArea))

@@ -35,6 +35,7 @@ struct RecordingInspector: View {
                     case .zoom: ZoomPanel(doc: doc)
                     case .clip: ClipPanel(doc: doc)
                     case .audio: AudioPanel(doc: doc)
+                    case .webcam: WebcamPanel(doc: doc)
                     }
                 }
                 .padding(18)
@@ -451,6 +452,199 @@ private struct AudioTrackRow: View {
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.05)))
+    }
+}
+
+// MARK: - Camera
+
+private struct WebcamPanel: View {
+    @ObservedObject var doc: RecordingDocument
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            if doc.hasWebcam {
+                let style = doc.edits.style.webcam
+                InspectorToggle(
+                    title: "Show camera",
+                    detail: doc.webcamDeviceName,
+                    isOn: Binding(get: { doc.showsWebcam }, set: { doc.setWebcamVisible($0) })
+                )
+                Group {
+                    InspectorSection("Shape") {
+                        HStack(spacing: 8) {
+                            ForEach(WebcamShape.allCases) { shape in
+                                WebcamShapeTile(shape: shape, selected: style.shape == shape) {
+                                    doc.update { $0.style.webcam.shape = shape }
+                                }
+                            }
+                        }
+                    }
+                    InspectorSection("Size") {
+                        SegmentedPills(options: WebcamSize.allCases, selection: doc.style(\.webcam.size), title: \.title, name: \.name)
+                    }
+                    InspectorSection("Position") {
+                        HStack(alignment: .center, spacing: 14) {
+                            WebcamCornerPicker(style: style) { corner in
+                                doc.update { $0.style.webcam.x = corner.position.x; $0.style.webcam.y = corner.position.y }
+                            }
+                            Text("Or drag the bubble in the preview.")
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    InspectorSection("While zoomed in") {
+                        SegmentedPills(options: WebcamZoomBehavior.allCases, selection: doc.style(\.webcam.duringZoom), title: \.title)
+                    }
+                    InspectorToggle(
+                        title: "Mirror",
+                        detail: "Shows you the way you saw yourself while recording.",
+                        isOn: doc.style(\.webcam.mirror)
+                    )
+                    InspectorToggle(
+                        title: "Border",
+                        detail: "A fine light ring around the edge.",
+                        isOn: doc.style(\.webcam.border)
+                    )
+                    InspectorToggle(
+                        title: "Shadow",
+                        isOn: doc.style(\.webcam.shadow)
+                    )
+                }
+                .disabled(!doc.showsWebcam)
+                .opacity(doc.showsWebcam ? 1 : 0.5)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Image(systemName: "video.slash")
+                        .font(.system(size: 20, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text("No camera in this recording")
+                        .font(.system(size: 12.5, weight: .semibold))
+                    Text("Turn on the camera in the bar at the bottom of the screen when you choose what to record, or in Settings › Recording. It's recorded on its own and shows here as a bubble you can shape and move.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+}
+
+/// A webcam shape as a SwiftUI shape, from the same outline the renderer draws.
+struct WebcamShapeOutline: Shape {
+    let shape: WebcamShape
+
+    func path(in rect: CGRect) -> Path {
+        Path(shape.path(in: rect))
+    }
+}
+
+private struct WebcamShapeTile: View {
+    let shape: WebcamShape
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 7) {
+                ZStack(alignment: .bottom) {
+                    WebcamShapeOutline(shape: shape)
+                        .fill(LinearGradient(
+                            colors: [Color.white.opacity(selected ? 0.32 : 0.2), Color.white.opacity(selected ? 0.16 : 0.08)],
+                            startPoint: .top, endPoint: .bottom
+                        ))
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 25))
+                        .foregroundStyle(Color.white.opacity(selected ? 0.9 : 0.55))
+                        .offset(y: 5)
+                }
+                .frame(width: 34 * shape.aspect, height: 34)
+                .clipShape(WebcamShapeOutline(shape: shape))
+                .overlay(WebcamShapeOutline(shape: shape).stroke(Color.white.opacity(0.25), lineWidth: 1))
+                .frame(height: 38)
+                Text(shape.title)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(selected ? Color.primary : Color.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(selected ? 0.1 : 0.04)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(selected ? Brand.accent : .clear, lineWidth: 2))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(shape.title)
+        .accessibilityLabel(shape.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// A row of equal pills, one selected: the inspector's segmented control. `name` is the full name for
+/// VoiceOver and the tooltip, when `title` is only an abbreviation.
+private struct SegmentedPills<Option: Hashable>: View {
+    let options: [Option]
+    @Binding var selection: Option
+    let title: KeyPath<Option, String>
+    var name: KeyPath<Option, String>?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(options, id: \.self) { option in
+                let selected = option == selection
+                Button { selection = option } label: {
+                    Text(option[keyPath: title])
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 28)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? Brand.accent : Color.white.opacity(0.07)))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(name.map { option[keyPath: $0] } ?? "")
+                .accessibilityLabel(option[keyPath: name ?? title])
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+    }
+}
+
+/// A small frame with a target in each corner; the bubble's corner is filled.
+private struct WebcamCornerPicker: View {
+    let style: WebcamStyle
+    let onSelect: (WebcamCorner) -> Void
+
+    var body: some View {
+        let current = WebcamLayout.corner(of: style)
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.1)))
+            ForEach(WebcamCorner.allCases) { corner in
+                let selected = corner == current
+                Button { onSelect(corner) } label: {
+                    WebcamShapeOutline(shape: style.shape)
+                        .fill(selected ? Brand.accent : Color.white.opacity(0.18))
+                        .frame(width: 16 * style.shape.aspect, height: 16)
+                        .padding(6)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(corner.title)
+                .accessibilityLabel(corner.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: corner.alignment)
+            }
+        }
+        .frame(width: 96, height: 60)
+        .animation(.snappy(duration: 0.18), value: current)
+    }
+}
+
+private extension WebcamCorner {
+    var alignment: Alignment {
+        switch self {
+        case .topLeft: .topLeading
+        case .topRight: .topTrailing
+        case .bottomLeft: .bottomLeading
+        case .bottomRight: .bottomTrailing
+        }
     }
 }
 

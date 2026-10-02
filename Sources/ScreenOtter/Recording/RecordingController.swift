@@ -34,6 +34,7 @@ final class RecordingController: ObservableObject {
         let metadata: RecordingMetadata
         let recorder: ScreenRecorder
         let tracker: CursorTracker
+        let webcam: WebcamSession?
     }
 
     private var session: Session?
@@ -83,6 +84,7 @@ final class RecordingController: ObservableObject {
         let content = try await CaptureService.shareableContent()
         let setup = try makeSetup(target, content: content)
         let project = try RecordingProject.create(named: "Recording \(CaptureOutput.timestamp())")
+        var webcam: WebcamSession?
 
         do {
             // The desktop picture, for the "Wallpaper" background in the editor.
@@ -92,10 +94,14 @@ final class RecordingController: ObservableObject {
 
             // Asks for the microphone now (the first time), before the countdown, rather than mid-recording.
             let audio = await AudioCaptureOptions.current()
+            // The camera too, and it starts now so its bubble is up (and its exposure settled) by the first frame.
+            let screen = NSScreen.screens.first { $0.frame.contains(setup.countdownCenter) }
+            webcam = await WebcamSession.start(writingTo: project.webcamURL, on: screen)
 
             if Preferences.shared.recordingCountdown {
                 state = .countingDown
                 guard await countdown(at: setup.countdownCenter) else {
+                    webcam?.cancel()
                     try? FileManager.default.removeItem(at: project.folder)
                     state = .idle
                     return
@@ -111,6 +117,8 @@ final class RecordingController: ObservableObject {
             }
             let tracker = CursorTracker(locate: setup.locate)
             tracker.start()
+            // Rolling a moment before the screen: frames from before its first one are trimmed in the editor.
+            webcam?.beginWriting()
             do {
                 try await recorder.start()
             } catch {
@@ -126,13 +134,14 @@ final class RecordingController: ObservableObject {
                 scale: setup.scale,
                 duration: 0
             )
-            session = Session(project: project, metadata: metadata, recorder: recorder, tracker: tracker)
+            session = Session(project: project, metadata: metadata, recorder: recorder, tracker: tracker, webcam: webcam)
             state = .recording(since: Date())
             if let outline = setup.outline {
                 border = RecordingBorderPanel(around: outline)
                 border?.orderFrontRegardless()
             }
         } catch {
+            webcam?.cancel()
             try? FileManager.default.removeItem(at: project.folder)
             throw error
         }
@@ -262,6 +271,7 @@ final class RecordingController: ObservableObject {
         state = .finishing
         border?.orderOut(nil)
         border = nil
+        session.webcam?.dismissPreview()
         Task {
             defer {
                 self.session = nil
@@ -273,6 +283,7 @@ final class RecordingController: ObservableObject {
                 var metadata = session.metadata
                 metadata.duration = result.duration
                 metadata.audio = result.audio
+                metadata.webcam = await session.webcam?.finish(screenStart: result.startHostTime)
                 try session.project.save(metadata)
                 try session.project.save(cursor)
                 try session.project.save(RecordingEdits.initial(duration: result.duration, clicks: cursor.clicks, style: .lastUsed))
@@ -280,6 +291,7 @@ final class RecordingController: ObservableObject {
                 DraftsLibrary.shared.reload()
             } catch {
                 _ = session.tracker.stop(start: 0, duration: 0)
+                session.webcam?.cancel()
                 try? FileManager.default.removeItem(at: session.project.folder)
                 CaptureOutput.presentError(error)
             }

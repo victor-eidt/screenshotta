@@ -18,6 +18,8 @@ nonisolated struct RecordingMetadata: Codable, Sendable {
     /// Sound recorded alongside, one file per source. Missing in recordings made before audio existed:
     /// optional, so the synthesized decoding still reads them.
     var audio: [RecordedAudioTrack]?
+    /// The camera recorded alongside, if it was on. Missing in older recordings, like `audio`.
+    var webcam: RecordedWebcam?
 
     /// The audio tracks, none when the recording has no sound.
     var audioTracks: [RecordedAudioTrack] { audio ?? [] }
@@ -121,6 +123,9 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
     var autoZoom = true
     var zoomScale: Double = 2
 
+    /// The webcam bubble, for recordings that have one.
+    var webcam = WebcamStyle()
+
     private static let defaultsKey = "recordingStyle"
 
     static var lastUsed: RecordingStyle {
@@ -158,12 +163,14 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
         clickEffect = (try? c.decode(Bool.self, forKey: .clickEffect)) ?? d.clickEffect
         autoZoom = (try? c.decode(Bool.self, forKey: .autoZoom)) ?? d.autoZoom
         zoomScale = (try? c.decode(Double.self, forKey: .zoomScale)) ?? d.zoomScale
+        webcam = (try? c.decode(WebcamStyle.self, forKey: .webcam)) ?? d.webcam
     }
 
     private enum CodingKeys: String, CodingKey {
         case background, backgroundBlur, padding, cornerRadius, shadow, aspect, minimalWindowFrame
         case showCursor, cursorStyle, cursorSize, smoothCursor, cursorMotionBlur, hideIdleCursor, clickEffect
         case autoZoom, zoomScale
+        case webcam
     }
 }
 
@@ -180,6 +187,8 @@ nonisolated struct RecordingEdits: Codable, Equatable, Sendable {
     var cutRight: Double?
     /// Volume and mute per audio source. Missing until a track is first changed.
     var audio: [AudioSource: AudioTrackMix]?
+    /// The webcam bubble is turned off in this video. Missing means shown.
+    var webcamHidden: Bool?
 
     static func initial(duration: Double, clicks: [CursorRecording.Sample], style: RecordingStyle) -> RecordingEdits {
         var edits = RecordingEdits(segments: [ClipSegment(start: 0, end: duration)], zooms: [], style: style)
@@ -202,6 +211,8 @@ nonisolated struct RecordingProject: Sendable {
 
     func audioURL(_ source: AudioSource) -> URL { folder.appendingPathComponent(source.fileName) }
     func url(of track: RecordedAudioTrack) -> URL { folder.appendingPathComponent(track.file) }
+    var webcamURL: URL { folder.appendingPathComponent(RecordedWebcam.fileName) }
+    func url(of webcam: RecordedWebcam) -> URL { folder.appendingPathComponent(webcam.file) }
 
     static var libraryFolder: URL {
         AppFolders.support.appendingPathComponent("Recordings", isDirectory: true)

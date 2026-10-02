@@ -606,6 +606,8 @@ private struct RecordingPane: View {
 
             RecordingAudioSection()
 
+            RecordingCameraSection()
+
             SettingsSection("Drafts", footer: "Every recording is a draft: edits save as you go. Reopen, rename, duplicate or trash them from the Drafts window.") {
                 SettingsRow(drafts.drafts.isEmpty ? "No drafts yet" : "\(drafts.drafts.count) draft\(drafts.drafts.count == 1 ? "" : "s")") {
                     Button("Open Drafts") { DraftsWindowController.shared.show() }
@@ -623,6 +625,8 @@ private struct RecordingPane: View {
                 FeatureRow(symbol: "scissors", title: "Clips & speed", detail: "Trim, split, cut the sides and change the speed of each clip.")
                 RowDivider()
                 FeatureRow(symbol: "waveform", title: "Audio", detail: "Microphone and system audio on their own tracks, with volume and mute.")
+                RowDivider()
+                FeatureRow(symbol: "person.crop.square", title: "Camera bubble", detail: "A circle, a rounded square or a pebble, in any corner, out of the way while zoomed in.")
             }
         }
         .onAppear { drafts.reload() }
@@ -794,6 +798,51 @@ private struct RecordingAudioSection: View {
         .onAppear {
             microphones = Microphones.all()
             denied = Microphones.isDenied
+        }
+    }
+}
+
+/// The camera, also offered in the bar at the bottom of the screen when choosing what to record.
+private struct RecordingCameraSection: View {
+    @ObservedObject private var prefs = Preferences.shared
+    @State private var cameras: [Webcams.Device] = []
+    @State private var denied = Webcams.isDenied
+
+    var body: some View {
+        SettingsSection("Camera", footer: "The camera is saved on its own and shows as a bubble over the video. Shape it, move it or hide it in the editor.") {
+            ToggleRow(title: "Camera", detail: "Records you next to the screen, with a live bubble while recording.", isOn: Binding(
+                get: { prefs.recordCamera },
+                set: { on in
+                    prefs.recordCamera = on
+                    if on { Task { _ = await Webcams.requestAccess(); denied = Webcams.isDenied } }
+                }
+            ))
+            if prefs.recordCamera {
+                RowDivider()
+                if denied {
+                    SettingsRow("Camera access is off", detail: "Recordings go on without it until it's allowed.") {
+                        Button("Open Settings") { Webcams.openPrivacySettings() }
+                            .buttonStyle(.soft)
+                    }
+                } else {
+                    SettingsRow("Device") {
+                        // A saved camera that's disconnected shows as System Default, which is what records; it's kept for when it's back.
+                        Picker("", selection: Binding(
+                            get: { cameras.contains { $0.id == prefs.cameraID } ? prefs.cameraID ?? "" : "" },
+                            set: { prefs.cameraID = $0.isEmpty ? nil : $0 }
+                        )) {
+                            Text("System Default").tag("")
+                            ForEach(cameras) { Text($0.name).tag($0.id) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            cameras = Webcams.all()
+            denied = Webcams.isDenied
         }
     }
 }

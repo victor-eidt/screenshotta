@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// The small bar at the bottom of the screen while choosing what to record: microphone and system audio.
+/// The small bar at the bottom of the screen while choosing what to record: microphone, system audio and camera.
 /// It floats above the selection overlay and never takes focus, like the overlay itself. It sits on the
 /// screen with the pointer, so it's there whichever display is being recorded.
 final class RecordingOptionsBar {
@@ -37,11 +37,26 @@ final class RecordingOptionsModel: ObservableObject {
     @Published var showsMicrophones = false
     @Published private(set) var microphones: [Microphones.Device] = []
     @Published private(set) var microphoneDenied = Microphones.isDenied
+    @Published var showsCameras = false
+    @Published private(set) var cameras: [Webcams.Device] = []
+    @Published private(set) var cameraDenied = Webcams.isDenied
 
     func refreshDevices() {
         microphones = Microphones.all()
         microphoneDenied = Microphones.isDenied
+        cameras = Webcams.all()
+        cameraDenied = Webcams.isDenied
     }
+
+    /// The camera that will record: the chosen one if it's connected, else the default.
+    var selectedCamera: Webcams.Device? {
+        let prefs = Preferences.shared
+        guard prefs.recordCamera else { return nil }
+        return Webcams.recording(saved: prefs.cameraID, in: cameras)
+    }
+
+    /// The camera is on and allowed.
+    var cameraActive: Bool { Preferences.shared.recordCamera && !cameraDenied && !cameras.isEmpty }
 
     /// The microphone that will record: the chosen one if it's plugged in, else the system's.
     var selectedMicrophone: Microphones.Device? {
@@ -106,6 +121,10 @@ struct RecordingOptionsView: View {
                 microphoneList
                     .transition(.opacity.combined(with: .offset(y: 6)))
             }
+            if model.showsCameras {
+                cameraList
+                    .transition(.opacity.combined(with: .offset(y: 6)))
+            }
             HStack(spacing: 6) {
                 OptionChip(
                     symbol: model.microphoneActive ? "mic.fill" : "mic.slash.fill",
@@ -115,7 +134,10 @@ struct RecordingOptionsView: View {
                     disclosure: true
                 ) {
                     model.refreshDevices()
-                    withAnimation(.snappy(duration: 0.2)) { model.showsMicrophones.toggle() }
+                    withAnimation(.snappy(duration: 0.2)) {
+                        model.showsCameras = false
+                        model.showsMicrophones.toggle()
+                    }
                 }
                 OptionChip(
                     symbol: prefs.recordSystemAudio ? "speaker.wave.2.fill" : "speaker.slash.fill",
@@ -123,6 +145,19 @@ struct RecordingOptionsView: View {
                     isOn: prefs.recordSystemAudio
                 ) {
                     prefs.recordSystemAudio.toggle()
+                }
+                OptionChip(
+                    symbol: model.cameraActive ? "video.fill" : "video.slash.fill",
+                    title: cameraTitle,
+                    isOn: model.cameraActive,
+                    warning: prefs.recordCamera && model.cameraDenied,
+                    disclosure: true
+                ) {
+                    model.refreshDevices()
+                    withAnimation(.snappy(duration: 0.2)) {
+                        model.showsMicrophones = false
+                        model.showsCameras.toggle()
+                    }
                 }
             }
             .padding(5)
@@ -167,8 +202,42 @@ struct RecordingOptionsView: View {
         .background(HUDBackground(cornerRadius: 14))
     }
 
+    private var cameraTitle: String {
+        if prefs.recordCamera, model.cameraDenied { return "Camera Blocked" }
+        return model.selectedCamera?.name ?? "No Camera"
+    }
+
+    private var cameraList: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if model.cameraDenied {
+                ListRow(title: "Allow in System Settings…", symbol: "lock.fill", isSelected: false) {
+                    Webcams.openPrivacySettings()
+                    SelectionController.shared.cancel()
+                }
+                Divider().padding(.vertical, 3).padding(.horizontal, 8)
+            }
+            ListRow(title: "No Camera", symbol: "video.slash", isSelected: !prefs.recordCamera) {
+                prefs.recordCamera = false
+                close()
+            }
+            ForEach(model.cameras) { device in
+                ListRow(title: device.name, symbol: "video", isSelected: model.selectedCamera == device) {
+                    prefs.cameraID = device.id
+                    prefs.recordCamera = true
+                    close()
+                }
+            }
+        }
+        .padding(5)
+        .frame(width: 280)
+        .background(HUDBackground(cornerRadius: 14))
+    }
+
     private func close() {
-        withAnimation(.snappy(duration: 0.2)) { model.showsMicrophones = false }
+        withAnimation(.snappy(duration: 0.2)) {
+            model.showsMicrophones = false
+            model.showsCameras = false
+        }
     }
 }
 

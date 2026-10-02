@@ -30,6 +30,7 @@ struct RecordingEditorView: View {
                 VStack(spacing: 0) {
                     PreviewToolbar(doc: doc)
                     PlayerSurface(player: doc.player)
+                        .overlay { WebcamDragHandle(doc: doc) }
                         .aspectRatio(doc.previewSize, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .shadow(color: .black.opacity(0.4), radius: 18, y: 6)
@@ -243,6 +244,65 @@ final class PlayerLayerView: NSView {
         CATransaction.setDisableActions(true)
         playerLayer.frame = bounds
         CATransaction.commit()
+    }
+}
+
+/// Lets the webcam bubble be dragged around the preview. Invisible until hovered; dropped near a corner,
+/// the bubble settles into it. Absent while the bubble is faded out for a zoom.
+private struct WebcamDragHandle: View {
+    @ObservedObject var doc: RecordingDocument
+    @State private var dragStart: CGPoint?
+    @State private var hovering = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            if let frames = doc.webcamFrame(in: geometry.size) {
+                let shape = doc.edits.style.webcam.shape
+                WebcamShapeOutline(shape: shape)
+                    .stroke(Color.white.opacity(hovering || dragStart != nil ? 0.9 : 0), lineWidth: 1.5)
+                    .shadow(color: .black.opacity(0.3), radius: 2)
+                    .contentShape(WebcamShapeOutline(shape: shape))
+                    .frame(width: frames.now.width, height: frames.now.height)
+                    .position(x: frames.now.midX, y: frames.now.midY)
+                    .onHover { inside in
+                        hovering = inside
+                        if inside { NSCursor.openHand.set() } else { NSCursor.arrow.set() }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 2)
+                            .onChanged { value in
+                                if dragStart == nil {
+                                    dragStart = frames.rest.origin
+                                    doc.beginInteraction()
+                                    NSCursor.closedHand.set()
+                                }
+                                guard let start = dragStart else { return }
+                                let origin = CGPoint(x: start.x + value.translation.width, y: start.y + value.translation.height)
+                                doc.moveWebcam(origin: origin, in: geometry.size, snap: false)
+                            }
+                            .onEnded { value in
+                                if let start = dragStart {
+                                    let origin = CGPoint(x: start.x + value.translation.width, y: start.y + value.translation.height)
+                                    doc.moveWebcam(origin: origin, in: geometry.size, snap: true)
+                                }
+                                dragStart = nil
+                                doc.endInteraction()
+                                if hovering { NSCursor.openHand.set() }
+                            }
+                    )
+                    .help("Drag to move the camera")
+                    .animation(.easeOut(duration: 0.15), value: hovering)
+                    // Gone when the bubble fades out for a zoom: leave no hand cursor or open drag behind.
+                    .onDisappear {
+                        if hovering { NSCursor.arrow.set() }
+                        hovering = false
+                        if dragStart != nil {
+                            dragStart = nil
+                            doc.endInteraction()
+                        }
+                    }
+            }
+        }
     }
 }
 
