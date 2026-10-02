@@ -1,11 +1,11 @@
 import AppKit
 
 enum EditorTool: String, CaseIterable, Identifiable {
-    case select, crop, arrow, line, rectangle, ellipse, pen, text, redact
+    case select, crop, arrow, line, rectangle, ellipse, pen, highlight, text, redact, spotlight
 
     var id: String { rawValue }
 
-    static let drawing: [EditorTool] = [.select, .arrow, .line, .rectangle, .ellipse, .pen, .text, .redact]
+    static let drawing: [EditorTool] = [.select, .arrow, .line, .rectangle, .ellipse, .pen, .highlight, .text, .redact, .spotlight]
 
     var symbol: String {
         switch self {
@@ -16,8 +16,10 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .rectangle: "rectangle"
         case .ellipse: "circle"
         case .pen: "scribble"
+        case .highlight: "highlighter"
         case .text: "textformat"
         case .redact: "checkerboard.rectangle"
+        case .spotlight: "rectangle.center.inset.filled"
         }
     }
 
@@ -30,8 +32,10 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .rectangle: "Rectangle (R)"
         case .ellipse: "Circle (O)"
         case .pen: "Pen (P)"
+        case .highlight: "Highlighter (H)"
         case .text: "Text (T)"
         case .redact: "Blur and pixelate (B)"
+        case .spotlight: "Spotlight (S)"
         }
     }
 
@@ -44,8 +48,10 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .rectangle: "r"
         case .ellipse: "o"
         case .pen: "p"
+        case .highlight: "h"
         case .text: "t"
         case .redact: "b"
+        case .spotlight: "s"
         }
     }
 
@@ -56,19 +62,24 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .rectangle: .rectangle
         case .ellipse: .ellipse
         case .pen: .pen
+        case .highlight: .highlight
         case .text: .text
         case .redact: .redact
+        case .spotlight: .spotlight
         case .select, .crop: nil
         }
     }
 
     /// Whether switching to this tool keeps an annotation of `kind` selected: tools that edit their own
-    /// kind in place (restyle a label, resize a redaction) keep it, so the style chip still applies.
+    /// kind in place (restyle a label, resize a redaction or a spotlight, recolor a highlight) keep it,
+    /// so the style chip still applies.
     func keepsSelection(of kind: Annotation.Kind) -> Bool {
         switch self {
         case .select: true
         case .text: kind == .text
         case .redact: kind == .redact
+        case .highlight: kind == .highlight
+        case .spotlight: kind == .spotlight
         default: false
         }
     }
@@ -80,6 +91,13 @@ struct Annotation: Identifiable, Equatable {
         case arrow, line, rectangle, ellipse, pen, text
         /// Blurs or pixelates the screenshot under its rect (the style's `redaction` picks which).
         case redact
+        /// Translucent marker ink along `points`, multiplied over the screenshot.
+        case highlight
+        /// Keeps its rect lit while everything outside every spotlight is dimmed.
+        case spotlight
+
+        /// A rect on the screenshot that is moved and resized by its corners and edges, and stays on it.
+        var isRegion: Bool { self == .redact || self == .spotlight }
     }
 
     var id = UUID()
@@ -103,13 +121,17 @@ struct Annotation: Identifiable, Equatable {
     var fontPointSize: CGFloat { fontSize ?? style.weight.textPoints }
     var fontPixelSize: CGFloat { fontPointSize * scale }
 
+    /// A highlighter stroke's height in image pixels.
+    var highlighterHeight: CGFloat { style.markerWeight.highlighterPoints * scale }
+
     var rect: CGRect {
         CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
     }
 
     var bounds: CGRect {
         if kind == .text { return TextLayout(self).plate }
-        if kind == .redact { return rect }
+        if kind.isRegion { return rect }
+        if kind == .highlight { return HighlighterGeometry.outline(points, height: highlighterHeight).boundingBoxOfPath }
         let base: CGRect
         if kind == .pen, let first = points.first {
             base = points.reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
@@ -124,13 +146,15 @@ struct Annotation: Identifiable, Equatable {
         switch kind {
         case .pen: points.count < 2
         case .text: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .redact: min(rect.width, rect.height) < Self.minimumRedactionSide * scale
+        case .redact, .spotlight: min(rect.width, rect.height) < Self.minimumRegionSide * scale
+        case .highlight: HighlighterGeometry.length(of: points) < HighlighterGeometry.minimumLengthPoints * scale
         default: hypot(end.x - start.x, end.y - start.y) < width
         }
     }
 
-    /// The smallest side of a redaction, in points: smaller is a click, and can't hide anything anyway.
-    static let minimumRedactionSide: CGFloat = 4
+    /// The smallest side of a redaction or a spotlight, in points: smaller is a click, and couldn't hide
+    /// (or show) anything anyway.
+    static let minimumRegionSide: CGFloat = 4
 
     mutating func translate(by delta: CGPoint) {
         start = start + delta
@@ -145,8 +169,12 @@ struct Annotation: Identifiable, Equatable {
             return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(p)
         case .rectangle, .ellipse:
             return rect.insetBy(dx: -t, dy: -t).contains(p)
-        case .redact:
+        case .redact, .spotlight:
             return rect.insetBy(dx: -tolerance, dy: -tolerance).contains(p)
+        case .highlight:
+            let reach = tolerance + highlighterHeight / 2
+            guard points.count > 1 else { return points.first.map { hypot(p.x - $0.x, p.y - $0.y) <= reach } ?? false }
+            return zip(points, points.dropFirst()).contains { distance(from: p, toSegment: $0, $1) <= reach }
         case .line, .arrow:
             return distance(from: p, toSegment: start, end) <= t
         case .pen:
@@ -179,16 +207,32 @@ enum AnnotationRenderer {
         ctx.restoreGState()
     }
 
-    /// Draws every annotation over the screenshot: redactions first, from the screenshot's own pixels, so
-    /// arrows and labels on top of a redacted region stay crisp and never get blurred into it.
-    /// - Parameter visible: the part of the image being drawn (the crop), in image pixels.
-    static func drawAll(_ annotations: [Annotation], redactions: RedactionRenderer, visible: CGRect, in ctx: CGContext, unit: CGFloat) {
+    /// Draws every annotation over the screenshot, in layers: the spotlight's blur, then redactions (from
+    /// the screenshot's own pixels, so nothing on top gets blurred into them), highlighter ink, the
+    /// spotlight's dim, and the shapes and labels last, so they stay crisp and bright over all of it.
+    /// - Parameters:
+    ///   - visible: the part of the image being drawn (the crop), in image pixels.
+    ///   - unit: device units per image pixel (shadows ignore the CTM, so they need it).
+    static func drawAll(
+        _ annotations: [Annotation], redactions: RedactionRenderer, spotlights: SpotlightRenderer,
+        visible: CGRect, in ctx: CGContext, unit: CGFloat
+    ) {
+        let lit = SpotlightRenderer.shown(annotations, in: visible)
+        // The spotlight's mask is smooth, so on screen it is made at the screen's resolution (device
+        // pixels per image pixel), and never finer than the image.
+        let device = ctx.userSpaceToDeviceSpaceTransform
+        let resolution = min(1, hypot(device.a, device.b))
         let redacted = annotations.filter { $0.kind == .redact }
+        spotlights.drawBlur(lit, redacted: redacted, redactions: redactions, visible: visible, resolution: resolution, in: ctx)
         for a in redacted {
             redactions.draw(a, visible: visible, in: ctx)
         }
         redactions.keepOnly(Set(redacted.map(\.id)))
-        for a in annotations where a.kind != .redact {
+        for a in annotations where a.kind == .highlight {
+            drawHighlight(a, in: ctx)
+        }
+        spotlights.drawDim(lit, visible: visible, resolution: resolution, in: ctx)
+        for a in annotations where !a.kind.isRegion && a.kind != .highlight {
             draw(a, in: ctx, unit: unit)
         }
     }
@@ -196,8 +240,8 @@ enum AnnotationRenderer {
     /// - Parameter unit: device units per image pixel (shadows ignore the CTM, so they need it).
     static func draw(_ a: Annotation, in ctx: CGContext, unit: CGFloat) {
         if a.kind == .text { return drawText(a, in: ctx, unit: unit) }
-        // Redactions need the screenshot's pixels and are drawn by `drawAll`.
-        if a.kind == .redact { return }
+        // Regions and highlights are drawn in their own layers by `drawAll`.
+        if a.kind.isRegion || a.kind == .highlight { return }
         ctx.saveGState()
         ctx.setShadow(
             offset: CGSize(width: 0, height: -a.width * 0.3 * unit),
@@ -231,7 +275,7 @@ enum AnnotationRenderer {
         case .pen:
             ctx.addPath(smoothPath(a.points))
             ctx.strokePath()
-        case .text, .redact:
+        case .text, .redact, .highlight, .spotlight:
             break
         }
         ctx.restoreGState()

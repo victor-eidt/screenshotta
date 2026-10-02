@@ -11,29 +11,40 @@ struct StylePicker: View {
 
     var body: some View {
         let style = doc.displayedStyle
-        let colorName = AnnotationPalette.swatch(for: style.color)?.name ?? "Custom color"
+        let color = doc.displayedColor
+        let weight = doc.displayedWeight
+        let palette = doc.palette
+        let colorName = palette.swatch(for: color)?.name ?? "Custom color"
         // Text reads the weight as a size, so it is described by its size, font and look instead.
-        // A redaction has no color or weight: the chip shows its mode instead.
+        // A redaction or a spotlight has no color or weight: the chip shows its mode instead.
         let summary = doc.isStylingRedaction
             ? style.redaction.title
+            : doc.isStylingSpotlight
+            ? style.spotlight.title
             : doc.isStylingText
             ? "\(colorName), \(Int((doc.selectedAnnotation?.fontPointSize ?? style.weight.textPoints).rounded())) pt, \(style.font.title), \(style.label.title)"
-            : "\(colorName), \(style.weight.title)"
+            : "\(colorName), \(weight.title)"
         Button { isOpen.toggle() } label: {
             HStack(spacing: 8) {
                 if doc.isStylingRedaction {
                     // As wide as the dot and glyph it replaces, so the toolbar doesn't shift.
                     RedactionGlyph(mode: style.redaction)
                         .frame(width: 40, height: 18)
+                } else if doc.isStylingSpotlight {
+                    SpotlightGlyph(mode: style.spotlight)
+                        .frame(width: 40, height: 18)
                 } else {
-                    SwatchDot(color: style.color, diameter: 18)
-                    if doc.isStylingText {
+                    SwatchDot(color: color, diameter: 18)
+                    if doc.isStylingHighlight {
+                        MarkerGlyph(weight: weight, color: color, length: 14, thickness: 0.4)
+                            .frame(width: 14)
+                    } else if doc.isStylingText {
                         Text("Aa")
                             .font(Font(style.font.ctFont(size: 12)))
                             .foregroundStyle(Color.primary.opacity(0.85))
                             .fixedSize()
                     } else {
-                        WeightGlyph(weight: style.weight, length: 14, thickness: 0.8)
+                        WeightGlyph(weight: weight, length: 14, thickness: 0.8)
                             .frame(width: 14)
                     }
                 }
@@ -51,7 +62,9 @@ struct StylePicker: View {
         .onHover { isHovered = $0 }
         .help(doc.isStylingRedaction
             ? "Redaction: \(summary). Press B to switch"
-            : "Style: \(summary). Keys 1–\(AnnotationPalette.swatches.count) pick a color")
+            : doc.isStylingSpotlight
+            ? "Spotlight: \(summary). Press S to switch"
+            : "Style: \(summary). Keys 1–\(palette.count) pick a color")
         .accessibilityLabel("Style")
         .accessibilityValue(summary)
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
@@ -66,17 +79,35 @@ struct StylePopover: View {
     var body: some View {
         if doc.isStylingRedaction {
             redactionOptions
+        } else if doc.isStylingSpotlight {
+            spotlightOptions
         } else {
             styleOptions
         }
+    }
+
+    /// Dim, or dim and blur, previewed. The strength is fixed: one look that works in every shot.
+    private var spotlightOptions: some View {
+        HStack(spacing: 6) {
+            ForEach(SpotlightMode.allCases) { mode in
+                ModeOptionButton(title: mode.title, shortcut: "S", isSelected: doc.displayedStyle.spotlight == mode) {
+                    doc.pickSpotlight(mode)
+                } glyph: {
+                    SpotlightGlyph(mode: mode)
+                }
+            }
+        }
+        .padding(12)
     }
 
     /// Blur and pixelate, previewed. Their strength isn't a setting: it follows the region's size.
     private var redactionOptions: some View {
         HStack(spacing: 6) {
             ForEach(RedactionMode.allCases) { mode in
-                RedactionModeButton(mode: mode, isSelected: doc.displayedStyle.redaction == mode) {
+                ModeOptionButton(title: mode.title, shortcut: "B", isSelected: doc.displayedStyle.redaction == mode) {
                     doc.pickRedaction(mode)
+                } glyph: {
+                    RedactionGlyph(mode: mode)
                 }
             }
         }
@@ -85,26 +116,34 @@ struct StylePopover: View {
 
     private var styleOptions: some View {
         let style = doc.displayedStyle
+        let color = doc.displayedColor
+        let weight = doc.displayedWeight
+        // The highlighter has its own short set of marker tints.
+        let palette = doc.palette
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 4) {
-                ForEach(Array(AnnotationPalette.swatches.enumerated()), id: \.element.id) { index, swatch in
-                    SwatchButton(color: swatch.color, isSelected: style.color == swatch.color, help: "\(swatch.name) (\(index + 1))") {
-                        doc.updateStyle { $0.color = swatch.color }
+                ForEach(Array(palette.enumerated()), id: \.element.id) { index, swatch in
+                    SwatchButton(color: swatch.color, isSelected: color == swatch.color, help: "\(swatch.name) (\(index + 1))") {
+                        doc.pickColor(swatch.color)
                     }
                 }
-                CustomColorButton(color: style.color, isCustom: AnnotationPalette.swatch(for: style.color) == nil) {
-                    StyleColorPanel.shared.show(for: doc)
+                // Marker ink stays within its light tints: a dark custom marker would bury the text.
+                if !doc.isStylingHighlight {
+                    CustomColorButton(color: color, isCustom: palette.swatch(for: color) == nil) {
+                        StyleColorPanel.shared.show(for: doc)
+                    }
                 }
             }
 
             Divider().opacity(0.6)
 
             HStack(spacing: 6) {
-                ForEach(StrokeWeight.allCases) { weight in
+                ForEach(StrokeWeight.allCases) { option in
                     // A resized label has its own size, so no preset is highlighted.
-                    WeightButton(weight: weight, font: doc.isStylingText ? style.font : nil,
-                                 isSelected: style.weight == weight && doc.selectedAnnotation?.fontSize == nil) {
-                        doc.pickWeight(weight)
+                    WeightButton(weight: option, font: doc.isStylingText ? style.font : nil,
+                                 marker: doc.isStylingHighlight ? color : nil,
+                                 isSelected: weight == option && doc.selectedAnnotation?.fontSize == nil) {
+                        doc.pickWeight(option)
                     }
                 }
             }
@@ -161,6 +200,38 @@ private struct WeightGlyph: View {
             .fill(Color.primary.opacity(0.85))
             .frame(width: length, height: max(1.5, weight.points * thickness))
             .rotationEffect(.degrees(-35))
+    }
+}
+
+/// A short band of marker ink, slanted at the ends like the stroke itself, as tall as the weight's
+/// highlighter (scaled by `thickness` where space is tight).
+private struct MarkerGlyph: View {
+    let weight: StrokeWeight
+    let color: StyleColor
+    let length: CGFloat
+    var thickness: CGFloat = 0.5
+
+    var body: some View {
+        let height = weight.highlighterPoints * thickness
+        MarkerBand(slant: height * tan(HighlighterGeometry.nibTilt))
+            .fill(Color(nsColor: color.nsColor))
+            .overlay(MarkerBand(slant: height * tan(HighlighterGeometry.nibTilt)).stroke(Color.primary.opacity(color.isLight ? 0.12 : 0), lineWidth: 0.5))
+            .frame(width: length, height: height)
+    }
+}
+
+/// A parallelogram with its ends leaning like a chisel nib.
+private struct MarkerBand: Shape {
+    let slant: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path { p in
+            p.move(to: CGPoint(x: rect.minX + slant, y: rect.minY))
+            p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+            p.addLine(to: CGPoint(x: rect.maxX - slant, y: rect.maxY))
+            p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            p.closeSubpath()
+        }
     }
 }
 
@@ -261,6 +332,8 @@ private struct OptionTile<Content: View>: View {
 private struct WeightButton: View {
     let weight: StrokeWeight
     var font: TextFont?
+    /// For the highlighter, its ink: the weight is shown as a marker band of that height.
+    var marker: StyleColor?
     let isSelected: Bool
     let action: () -> Void
     @State private var isHovered = false
@@ -272,6 +345,8 @@ private struct WeightButton: View {
                     Text("A")
                         .font(Font(font.ctFont(size: weight.textPoints * 0.55 + 3)))
                         .foregroundStyle(Color.primary.opacity(0.85))
+                } else if let marker {
+                    MarkerGlyph(weight: weight, color: marker, length: 34)
                 } else {
                     WeightGlyph(weight: weight, length: 30)
                 }
@@ -280,7 +355,7 @@ private struct WeightButton: View {
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
         .help(font == nil ? weight.title : "\(weight.title) (\(Int(weight.textPoints)) pt)")
-        .accessibilityLabel(font == nil ? "\(weight.title) stroke" : "\(weight.title) text")
+        .accessibilityLabel(font != nil ? "\(weight.title) text" : marker != nil ? "\(weight.title) marker" : "\(weight.title) stroke")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
@@ -406,19 +481,23 @@ private struct RedactionGlyph: View {
     }
 }
 
-private struct RedactionModeButton: View {
-    let mode: RedactionMode
+/// One of a tool's modes (blur or pixelate, dim or blur), previewed by its glyph, with the key that
+/// switches between them.
+private struct ModeOptionButton<Glyph: View>: View {
+    let title: String
+    let shortcut: String
     let isSelected: Bool
     let action: () -> Void
+    @ViewBuilder let glyph: Glyph
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
             OptionTile(width: 96, height: 66, isSelected: isSelected, isHovered: isHovered) {
                 VStack(spacing: 6) {
-                    RedactionGlyph(mode: mode)
+                    glyph
                         .frame(width: 44, height: 30)
-                    Text(mode.title)
+                    Text(title)
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(isSelected ? .primary : .secondary)
                 }
@@ -426,9 +505,51 @@ private struct RedactionModeButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help("\(mode.title) (B switches)")
-        .accessibilityLabel(mode.title)
+        .help("\(title) (\(shortcut) switches)")
+        .accessibilityLabel(title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// A tiny picture of a spotlight: lines of "content" with a lit card in the middle and the rest dimmed,
+/// blurred too in blur mode. The lit part stays sharp in both, as it does on the screenshot.
+private struct SpotlightGlyph: View {
+    let mode: SpotlightMode
+
+    /// The length of each line, as a fraction of the width.
+    private static let lines: [CGFloat] = [0.78, 0.56, 0.7]
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = geo.size
+            let outer = RoundedRectangle(cornerRadius: size.height * 0.22, style: .continuous)
+            let litSize = CGSize(width: size.width * 0.5, height: size.height * 0.56)
+            let lit = RoundedRectangle(cornerRadius: size.height * 0.14, style: .continuous)
+            let litFrame = CGRect(origin: CGPoint(x: (size.width - litSize.width) / 2, y: (size.height - litSize.height) / 2), size: litSize)
+            let content = VStack(alignment: .leading, spacing: size.height * 0.14) {
+                ForEach(0..<3, id: \.self) { line in
+                    Capsule()
+                        .fill(Color.primary.opacity(0.6))
+                        .frame(width: size.width * Self.lines[line], height: size.height * 0.11)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            ZStack {
+                outer.fill(Color.primary.opacity(0.06))
+                content.blur(radius: mode == .blur ? size.height * 0.05 : 0)
+                // The dim, with the lit card cut out of it.
+                Path { p in
+                    p.addRect(CGRect(origin: .zero, size: size))
+                    p.addPath(lit.path(in: litFrame))
+                }
+                .fill(Color.black.opacity(0.3), style: FillStyle(eoFill: true))
+                content.mask(lit.frame(width: litSize.width, height: litSize.height))
+                lit.strokeBorder(Color.primary.opacity(0.35), lineWidth: 0.75)
+                    .frame(width: litSize.width, height: litSize.height)
+            }
+            .clipShape(outer)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -455,7 +576,7 @@ final class StyleColorPanel: NSObject {
         panel.setAction(nil)
         panel.showsAlpha = false
         panel.isContinuous = true
-        panel.color = doc.displayedStyle.color.nsColor
+        panel.color = doc.displayedColor.nsColor
         attach(to: doc)
         panel.orderFront(nil)
     }
@@ -487,7 +608,7 @@ final class StyleColorPanel: NSObject {
         let now = ProcessInfo.processInfo.systemUptime
         if now - lastPick > Self.gestureGap { doc.endStyleCoalescing() }
         lastPick = now
-        doc.updateStyle(coalescing: true) { $0.color = color }
+        doc.pickColor(color, coalescing: true)
         // With no button held this was a discrete pick (a crayon, a palette swatch, the hex field),
         // so the next change gets its own undo step.
         if NSEvent.pressedMouseButtons == 0 { doc.endStyleCoalescing() }

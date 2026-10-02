@@ -241,6 +241,10 @@ import Testing
             let i = (y * width + x) * 4
             return [Int(bytes[i]), Int(bytes[i + 1]), Int(bytes[i + 2])]
         }
+
+        func alpha(_ x: Int, _ y: Int) -> Int {
+            Int(bytes[(y * width + x) * 4 + 3])
+        }
     }
 
     /// The region's pixels, minus a margin that keeps clear of the rounded corners and their antialiasing.
@@ -381,14 +385,14 @@ import Testing
         // Dragging it out redraws it at a new size every frame.
         for width in stride(from: 100, through: 500, by: 20) {
             draft.end = CGPoint(x: 40 + CGFloat(width), y: 130)
-            AnnotationRenderer.drawAll([draft], redactions: doc.redactions, visible: doc.imageBounds, in: ctx, unit: 1)
+            AnnotationRenderer.drawAll([draft], redactions: doc.redactions, spotlights: doc.spotlights, visible: doc.imageBounds, in: ctx, unit: 1)
             #expect(doc.redactions.cachedCount == 1)
         }
         let other = Self.redaction(.pixelate, CGRect(x: 40, y: 10, width: 100, height: 40))
-        AnnotationRenderer.drawAll([draft, other], redactions: doc.redactions, visible: doc.imageBounds, in: ctx, unit: 1)
+        AnnotationRenderer.drawAll([draft, other], redactions: doc.redactions, spotlights: doc.spotlights, visible: doc.imageBounds, in: ctx, unit: 1)
         #expect(doc.redactions.cachedCount == 2)
         // A redaction that's gone (deleted, undone) lets go of its pixels.
-        AnnotationRenderer.drawAll([other], redactions: doc.redactions, visible: doc.imageBounds, in: ctx, unit: 1)
+        AnnotationRenderer.drawAll([other], redactions: doc.redactions, spotlights: doc.spotlights, visible: doc.imageBounds, in: ctx, unit: 1)
         #expect(doc.redactions.cachedCount == 1)
     }
 

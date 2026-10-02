@@ -126,6 +126,13 @@ nonisolated struct AnnotationStyle: Codable, Equatable, Sendable {
     var label: TextLabelStyle
     /// Redactions only: blur or pixelate. Kept with the rest so the last one used comes back.
     var redaction: RedactionMode
+    /// Highlighter only: its own ink, so a soft yellow marker sits next to a coral arrow by default.
+    var marker: StyleColor
+    /// Highlighter only: its own height, so heavy demo arrows don't give the next marker a band taller
+    /// than a line of text (and a thick marker doesn't make the next arrow heavy).
+    var markerWeight: StrokeWeight
+    /// Spotlights only: dim, or dim and blur.
+    var spotlight: SpotlightMode
 
     static let `default` = AnnotationStyle()
 
@@ -134,13 +141,19 @@ nonisolated struct AnnotationStyle: Codable, Equatable, Sendable {
         weight: StrokeWeight = .regular,
         font: TextFont = .geist,
         label: TextLabelStyle = .filled,
-        redaction: RedactionMode = .blur
+        redaction: RedactionMode = .blur,
+        marker: StyleColor = HighlighterPalette.default,
+        markerWeight: StrokeWeight = .regular,
+        spotlight: SpotlightMode = .dim
     ) {
         self.color = color
         self.weight = weight
         self.font = font
         self.label = label
         self.redaction = redaction
+        self.marker = marker
+        self.markerWeight = markerWeight
+        self.spotlight = spotlight
     }
 
     // Decoding field by field keeps a saved style readable when fields are added, renamed or removed.
@@ -152,10 +165,13 @@ nonisolated struct AnnotationStyle: Codable, Equatable, Sendable {
         font = (try? c.decode(TextFont.self, forKey: .font)) ?? d.font
         label = (try? c.decode(TextLabelStyle.self, forKey: .label)) ?? d.label
         redaction = (try? c.decode(RedactionMode.self, forKey: .redaction)) ?? d.redaction
+        marker = (try? c.decode(StyleColor.self, forKey: .marker)) ?? d.marker
+        markerWeight = (try? c.decode(StrokeWeight.self, forKey: .markerWeight)) ?? d.markerWeight
+        spotlight = (try? c.decode(SpotlightMode.self, forKey: .spotlight)) ?? d.spotlight
     }
 
     private enum CodingKeys: String, CodingKey {
-        case color, weight, font, label, redaction
+        case color, weight, font, label, redaction, marker, markerWeight, spotlight
     }
 
     private static let defaultsKey = "annotationStyle"
@@ -196,12 +212,24 @@ nonisolated enum AnnotationPalette {
 
     /// The palette entry for a color, or nil for a custom color.
     static func swatch(for color: StyleColor) -> Swatch? {
-        swatches.first { $0.color == color }
+        swatches.swatch(for: color)
     }
 
     /// Number keys pick swatches: 1 is the first.
     static func swatch(forKey character: Character) -> Swatch? {
-        guard let n = character.wholeNumberValue, (1...swatches.count).contains(n) else { return nil }
-        return swatches[n - 1]
+        swatches.swatch(forKey: character)
+    }
+}
+
+extension [AnnotationPalette.Swatch] {
+    /// The entry for a color, or nil for a custom color.
+    nonisolated func swatch(for color: StyleColor) -> AnnotationPalette.Swatch? {
+        first { $0.color == color }
+    }
+
+    /// Number keys pick swatches: 1 is the first.
+    nonisolated func swatch(forKey character: Character) -> AnnotationPalette.Swatch? {
+        guard let n = character.wholeNumberValue, (1...count).contains(n) else { return nil }
+        return self[n - 1]
     }
 }

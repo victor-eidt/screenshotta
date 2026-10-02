@@ -58,6 +58,8 @@ final class EditorDocument: ObservableObject {
 
     /// Draws the redactions from this screenshot and keeps their results while the editor is open.
     let redactions: RedactionRenderer
+    /// Draws the dim and blur around the spotlights, and keeps their mask while the editor is open.
+    let spotlights: SpotlightRenderer
 
     /// - Parameter defaults: where the last used style is read from and saved to (a suite in tests).
     init(capture: CapturedImage, fileURL: URL?, defaults: UserDefaults = .standard) {
@@ -68,6 +70,7 @@ final class EditorDocument: ObservableObject {
         style = .lastUsed(in: defaults)
         crop = CGRect(x: 0, y: 0, width: capture.image.width, height: capture.image.height)
         redactions = RedactionRenderer(image: capture.image)
+        spotlights = SpotlightRenderer(image: capture.image, scale: capture.scale)
     }
 
     // MARK: - Editing
@@ -109,6 +112,46 @@ final class EditorDocument: ObservableObject {
         updateStyle { $0.redaction = mode }
     }
 
+    /// Whether the style picker is styling the highlighter (a selected stroke, or the tool with nothing
+    /// selected), so it offers marker tints and reads weights as marker heights.
+    var isStylingHighlight: Bool { selectedAnnotation.map { $0.kind == .highlight } ?? (tool == .highlight) }
+
+    /// Whether the style picker is styling spotlights (a selected one, or the tool with nothing
+    /// selected), so it offers dim and blur instead of colors and weights.
+    var isStylingSpotlight: Bool { selectedAnnotation.map { $0.kind == .spotlight } ?? (tool == .spotlight) }
+
+    /// The color the style picker shows and changes: the highlighter has its own ink.
+    var displayedColor: StyleColor { isStylingHighlight ? displayedStyle.marker : displayedStyle.color }
+
+    /// The weight the style picker shows and changes: the highlighter has its own height.
+    var displayedWeight: StrokeWeight { isStylingHighlight ? displayedStyle.markerWeight : displayedStyle.weight }
+
+    /// The swatches the style picker and the number keys offer: marker tints for the highlighter.
+    var palette: [AnnotationPalette.Swatch] { isStylingHighlight ? HighlighterPalette.swatches : AnnotationPalette.swatches }
+
+    /// Picks a color for what the style picker is styling: marker ink for the highlighter (lifted until
+    /// text stays readable under it), the shared color for everything else.
+    func pickColor(_ color: StyleColor, coalescing: Bool = false) {
+        if isStylingHighlight {
+            let ink = HighlighterPalette.ink(color)
+            updateStyle(coalescing: coalescing) { $0.marker = ink }
+        } else {
+            updateStyle(coalescing: coalescing) { $0.color = color }
+        }
+    }
+
+    /// Picks dim or blur for new spotlights and every existing one, in one undo step: they share one
+    /// overlay, so a mix would have no single look. `style.spotlight` always matches the spotlights in the
+    /// document (undo and redo sync it back), so new ones join the overlay as it looks.
+    func pickSpotlight(_ mode: SpotlightMode) {
+        style.spotlight = mode
+        guard annotations.contains(where: { $0.kind == .spotlight && $0.style.spotlight != mode }) else { return }
+        checkpoint()
+        for index in annotations.indices where annotations[index].kind == .spotlight {
+            annotations[index].style.spotlight = mode
+        }
+    }
+
     /// Changes the style for new annotations and, when one is selected, that annotation (undoably).
     /// Only the parts `change` touches are applied, so picking a color keeps the selection's own weight.
     /// - Parameters:
@@ -132,9 +175,13 @@ final class EditorDocument: ObservableObject {
         if resetsSize { annotations[index].fontSize = nil }
     }
 
-    /// Picks a stroke weight (for text, a size preset).
+    /// Picks a stroke weight (for text, a size preset; for the highlighter, its own height).
     func pickWeight(_ weight: StrokeWeight) {
-        updateStyle(resettingTextSize: true) { $0.weight = weight }
+        if isStylingHighlight {
+            updateStyle { $0.markerWeight = weight }
+        } else {
+            updateStyle(resettingTextSize: true) { $0.weight = weight }
+        }
     }
 
     /// Ends a run of coalesced style edits, so the next one gets its own undo step.
@@ -166,6 +213,8 @@ final class EditorDocument: ObservableObject {
     private func restore(_ snapshot: Snapshot) {
         annotations = snapshot.annotations
         crop = snapshot.crop
+        // The spotlights share one mode, which the restored ones may not have had: keep new ones in step.
+        if let spotlight = annotations.last(where: { $0.kind == .spotlight }) { style.spotlight = spotlight.style.spotlight }
         selectedID = nil
         if tool == .crop { pendingCrop = crop }
         isDirty = true
@@ -253,7 +302,7 @@ final class EditorDocument: ObservableObject {
         ctx.scaleBy(x: 1, y: -1)
         ctx.translateBy(x: -crop.minX, y: -crop.minY)
         AnnotationRenderer.drawImage(image, in: ctx)
-        AnnotationRenderer.drawAll(annotations, redactions: redactions, visible: crop, in: ctx, unit: 1)
+        AnnotationRenderer.drawAll(annotations, redactions: redactions, spotlights: spotlights, visible: crop, in: ctx, unit: 1)
         return ctx.makeImage()
     }
 
