@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppFolders.migrateFromOldName()
         MainMenu.install()
+        TextFont.registerBundledFonts()
         BackgroundCursor.enable()
         setupStatusItem()
         recordingObserver = RecordingController.shared.$state.sink { [weak self] state in

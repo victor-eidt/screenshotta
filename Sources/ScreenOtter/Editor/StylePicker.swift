@@ -12,11 +12,22 @@ struct StylePicker: View {
     var body: some View {
         let style = doc.displayedStyle
         let colorName = AnnotationPalette.swatch(for: style.color)?.name ?? "Custom color"
+        // Text reads the weight as a size, so it is described by its size, font and look instead.
+        let summary = doc.isStylingText
+            ? "\(colorName), \(Int((doc.selectedAnnotation?.fontPointSize ?? style.weight.textPoints).rounded())) pt, \(style.font.title), \(style.label.title)"
+            : "\(colorName), \(style.weight.title)"
         Button { isOpen.toggle() } label: {
             HStack(spacing: 8) {
                 SwatchDot(color: style.color, diameter: 18)
-                WeightGlyph(weight: style.weight, length: 14, thickness: 0.8)
-                    .frame(width: 14)
+                if doc.isStylingText {
+                    Text("Aa")
+                        .font(Font(style.font.ctFont(size: 12)))
+                        .foregroundStyle(Color.primary.opacity(0.85))
+                        .fixedSize()
+                } else {
+                    WeightGlyph(weight: style.weight, length: 14, thickness: 0.8)
+                        .frame(width: 14)
+                }
                 Image(systemName: "chevron.down")
                     .font(.system(size: 8.5, weight: .bold))
                     .foregroundStyle(.secondary)
@@ -29,9 +40,9 @@ struct StylePicker: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help("Style: \(colorName), \(style.weight.title). Keys 1–\(AnnotationPalette.swatches.count) pick a color")
+        .help("Style: \(summary). Keys 1–\(AnnotationPalette.swatches.count) pick a color")
         .accessibilityLabel("Style")
-        .accessibilityValue("\(colorName), \(style.weight.title)")
+        .accessibilityValue(summary)
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
             StylePopover(doc: doc)
         }
@@ -59,8 +70,30 @@ struct StylePopover: View {
 
             HStack(spacing: 6) {
                 ForEach(StrokeWeight.allCases) { weight in
-                    WeightButton(weight: weight, isSelected: style.weight == weight) {
-                        doc.updateStyle { $0.weight = weight }
+                    // A resized label has its own size, so no preset is highlighted.
+                    WeightButton(weight: weight, font: doc.isStylingText ? style.font : nil,
+                                 isSelected: style.weight == weight && doc.selectedAnnotation?.fontSize == nil) {
+                        doc.pickWeight(weight)
+                    }
+                }
+            }
+
+            if doc.isStylingText {
+                Divider().opacity(0.6)
+
+                HStack(spacing: 6) {
+                    ForEach(TextFont.allCases) { font in
+                        FontButton(font: font, isSelected: style.font == font) {
+                            doc.updateStyle { $0.font = font }
+                        }
+                    }
+                }
+
+                HStack(spacing: 6) {
+                    ForEach(TextLabelStyle.allCases) { label in
+                        LabelStyleButton(label: label, style: style, isSelected: style.label == label) {
+                            doc.updateStyle { $0.label = label }
+                        }
                     }
                 }
             }
@@ -174,27 +207,124 @@ private struct CustomColorButton: View {
     }
 }
 
+/// The rounded tile behind the weight, font and label choices.
+private struct OptionTile<Content: View>: View {
+    let width: CGFloat
+    let height: CGFloat
+    let isSelected: Bool
+    let isHovered: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
+        content
+            .frame(width: width, height: height)
+            .background(shape.fill(Color.primary.opacity(isSelected ? 0.13 : isHovered ? 0.06 : 0)))
+            .overlay(shape.strokeBorder(Color.primary.opacity(isSelected ? 0.16 : 0), lineWidth: 0.5))
+            .animation(.snappy(duration: 0.18), value: isSelected)
+            .contentShape(shape)
+    }
+}
+
+/// A stroke weight, or for text (`font` set) the size it gives, shown as a letter.
 private struct WeightButton: View {
     let weight: StrokeWeight
+    var font: TextFont?
     let isSelected: Bool
     let action: () -> Void
     @State private var isHovered = false
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
         Button(action: action) {
-            WeightGlyph(weight: weight, length: 30)
-                .frame(width: 71, height: 30)
-                .background(shape.fill(Color.primary.opacity(isSelected ? 0.13 : isHovered ? 0.06 : 0)))
-                .overlay(shape.strokeBorder(Color.primary.opacity(isSelected ? 0.16 : 0), lineWidth: 0.5))
-                .animation(.snappy(duration: 0.18), value: isSelected)
-                .contentShape(shape)
+            OptionTile(width: 71, height: 30, isSelected: isSelected, isHovered: isHovered) {
+                if let font {
+                    Text("A")
+                        .font(Font(font.ctFont(size: weight.textPoints * 0.55 + 3)))
+                        .foregroundStyle(Color.primary.opacity(0.85))
+                } else {
+                    WeightGlyph(weight: weight, length: 30)
+                }
+            }
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help(weight.title)
-        .accessibilityLabel("\(weight.title) stroke")
+        .help(font == nil ? weight.title : "\(weight.title) (\(Int(weight.textPoints)) pt)")
+        .accessibilityLabel(font == nil ? "\(weight.title) stroke" : "\(weight.title) text")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// A typeface, previewed in itself.
+private struct FontButton: View {
+    let font: TextFont
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            OptionTile(width: 96.6, height: 44, isSelected: isSelected, isHovered: isHovered) {
+                VStack(spacing: 1) {
+                    Text("Aa")
+                        .font(Font(font.ctFont(size: 16)))
+                        .foregroundStyle(Color.primary.opacity(0.9))
+                    Text(font.title)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(font.title)
+        .accessibilityLabel("\(font.title) font")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// A label style, previewed in the current color and font.
+private struct LabelStyleButton: View {
+    let label: TextLabelStyle
+    let style: AnnotationStyle
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            OptionTile(width: 96.6, height: 32, isSelected: isSelected, isHovered: isHovered) {
+                preview
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(label.title)
+        .accessibilityLabel("\(label.title) style")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private var preview: some View {
+        let color = Color(nsColor: style.color.nsColor)
+        let plate = RoundedRectangle(cornerRadius: 6, style: .continuous)
+        let text = Text(label.title).font(Font(style.font.ctFont(size: 11)))
+        return Group {
+            switch label {
+            case .plain:
+                text.foregroundStyle(color)
+                    .shadow(color: .black.opacity(Double(TextContrast.plainShadowAlpha(for: style.color))), radius: 1, y: 0.5)
+            case .filled:
+                text.foregroundStyle(Color(nsColor: TextContrast.textColor(onPlate: style.color).nsColor))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(plate.fill(color))
+            case .outlined:
+                text.foregroundStyle(color)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(plate.fill(Color(nsColor: TextContrast.outlineFill(for: style.color).nsColor)))
+                    .overlay(plate.strokeBorder(color, lineWidth: 1.25))
+            }
+        }
     }
 }
 

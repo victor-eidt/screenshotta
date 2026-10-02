@@ -17,6 +17,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp ".build/$CONFIG/ScreenOtter" "$APP/Contents/MacOS/ScreenOtter"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns Resources/MenuBarIcon.png Resources/MenuBarIcon@2x.png Resources/OtterHero.jpg "$APP/Contents/Resources/"
+# Text tool typefaces (SIL OFL) and their licenses, registered at launch.
+cp -R Resources/Fonts "$APP/Contents/Resources/"
 
 # Sign with a real identity when there is one: macOS keeps the Screen Recording
 # permission across rebuilds only if the signature stays the same.

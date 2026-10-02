@@ -80,7 +80,7 @@ nonisolated struct StyleColor: Hashable, Sendable, Codable {
 }
 
 /// How heavy an annotation is. Each tool maps it to its own size: a line width for shapes,
-/// later a font size for text or a radius for blur, so one control drives them all.
+/// a font size for text (later a radius for blur), so one control drives them all.
 nonisolated enum StrokeWeight: String, CaseIterable, Identifiable, Codable, Sendable {
     case fine, regular, bold, heavy
 
@@ -93,6 +93,16 @@ nonisolated enum StrokeWeight: String, CaseIterable, Identifiable, Codable, Send
         case .regular: 4
         case .bold: 6
         case .heavy: 9
+        }
+    }
+
+    /// Font size in points for text, which reads the weight as a size.
+    var textPoints: CGFloat {
+        switch self {
+        case .fine: 14
+        case .regular: 18
+        case .bold: 24
+        case .heavy: 34
         }
     }
 
@@ -110,12 +120,23 @@ nonisolated enum StrokeWeight: String, CaseIterable, Identifiable, Codable, Send
 nonisolated struct AnnotationStyle: Codable, Equatable, Sendable {
     var color: StyleColor
     var weight: StrokeWeight
+    /// Text only: the typeface and how the label sits on the image. Shapes carry and ignore them, so
+    /// switching tools keeps the last text look.
+    var font: TextFont
+    var label: TextLabelStyle
 
     static let `default` = AnnotationStyle()
 
-    init(color: StyleColor = AnnotationPalette.swatches[0].color, weight: StrokeWeight = .regular) {
+    init(
+        color: StyleColor = AnnotationPalette.swatches[0].color,
+        weight: StrokeWeight = .regular,
+        font: TextFont = .geist,
+        label: TextLabelStyle = .filled
+    ) {
         self.color = color
         self.weight = weight
+        self.font = font
+        self.label = label
     }
 
     // Decoding field by field keeps a saved style readable when fields are added, renamed or removed.
@@ -124,10 +145,12 @@ nonisolated struct AnnotationStyle: Codable, Equatable, Sendable {
         let d = AnnotationStyle()
         color = (try? c.decode(StyleColor.self, forKey: .color)) ?? d.color
         weight = (try? c.decode(StrokeWeight.self, forKey: .weight)) ?? d.weight
+        font = (try? c.decode(TextFont.self, forKey: .font)) ?? d.font
+        label = (try? c.decode(TextLabelStyle.self, forKey: .label)) ?? d.label
     }
 
     private enum CodingKeys: String, CodingKey {
-        case color, weight
+        case color, weight, font, label
     }
 
     private static let defaultsKey = "annotationStyle"

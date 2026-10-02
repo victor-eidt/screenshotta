@@ -11,6 +11,7 @@ A macOS menu bar app for screenshots and screen recordings. A sea otter keeps it
 - A small thumbnail slides in at the bottom right: **click** to edit, **drag** into any app, or **swipe** it away.
 - **Shelf** (default `⌥⇧D`, or shake the pointer while dragging files): a small floating glass panel that holds files for a moment. Drop screenshots on it (or click the tray button on the thumbnail), then drag the whole stack into a folder, a chat or a browser upload. Click the stack to see every file: Shift- or ⌘-click to select several and drag only those; Delete removes from the shelf, ⌘C copies, double-click opens. Recent shelves come back from the menu bar.
 - The editor can crop, and draw arrows, lines, rectangles, circles and freehand. Copy (`⌘C`) or close the window to write the edits back to the file and the clipboard.
+- **Text** (`T`): click to place a label and type in place. Return, Esc or a click away finishes it (Shift-Return for a new line); double-click (or select and press Return) to edit again, drag to move, drag the corner handle to resize. Three looks: plain text with a soft shadow, a filled label whose text turns black or white to contrast with the color, and an outlined label. Three bundled faces chosen for product shots: Geist (default), Plus Jakarta Sans and Geist Mono. The font and the look sit in the style chip, where the weights become text sizes.
 - **Style**: one chip in the editor toolbar holds a short palette chosen to look good in a demo (coral, orange, amber, green, blue, violet, ink, white), a custom color, and four stroke weights. Keys `1`–`8` pick a color. With an annotation selected, the style changes that one (`⌘Z` undoes it). The last style you used becomes the default for the next screenshot.
 - **Record Screen** (default `⌥⇧6`): drag an area, click to record the whole screen, or press Space and click a window. A 3-2-1 countdown runs first (Esc cancels; can be turned off). Click the timer in the menu bar, or press the shortcut again, to stop.
 - The recording opens in its own editor, in the style of Screen Studio:
@@ -32,6 +33,7 @@ Requires macOS 14+ and Xcode 26 (Swift 6.2).
 
 The build signs with your first code-signing identity (override with `SIGN_IDENTITY=...`) so the Screen Recording permission survives rebuilds.
 The artwork lives in `Resources/Brand`. `swift scripts/make-icons.swift` turns it into the app icon (`Resources/AppIcon.icns`), the menu bar icon and the illustration the app uses.
+The text tool's fonts live in `Resources/Fonts` (SIL Open Font License, licenses alongside) and are registered for the app only at launch.
 
 ScreenOtter used to be called Screenshotta. It keeps the old bundle identifier, so permissions and settings carry over, and moves its data to `~/Library/Application Support/ScreenOtter` on first launch.
 

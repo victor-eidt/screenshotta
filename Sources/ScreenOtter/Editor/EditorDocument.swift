@@ -25,11 +25,18 @@ final class EditorDocument: ObservableObject {
     @Published var tool: EditorTool = .arrow {
         didSet {
             guard tool != oldValue else { return }
+            endTextEditing()
             if oldValue == .crop { applyCrop() }
             if tool == .crop { pendingCrop = crop }
-            if tool != .select { selectedID = nil }
+            // The text tool keeps a selected label, so it can be restyled without switching tools.
+            if tool != .select && !(tool == .text && selectedAnnotation?.kind == .text) { selectedID = nil }
         }
     }
+
+    /// The text annotation being typed into, if any. Its edits are one undo step, taken when it ends.
+    @Published private(set) var editingTextID: UUID?
+    /// The annotations as they were when the text edit began.
+    private var textEditBaseline: [Annotation]?
 
     private struct Snapshot {
         var annotations: [Annotation]
@@ -62,8 +69,12 @@ final class EditorDocument: ObservableObject {
 
     /// Call before every change so it can be undone.
     func checkpoint() {
+        checkpoint(annotations: annotations)
+    }
+
+    private func checkpoint(annotations before: [Annotation]) {
         styleEditTarget = nil
-        undoStack.append(Snapshot(annotations: annotations, crop: crop))
+        undoStack.append(Snapshot(annotations: before, crop: crop))
         redoStack.removeAll()
         isDirty = true
     }
@@ -80,20 +91,36 @@ final class EditorDocument: ObservableObject {
     /// What the style picker shows: the selected annotation's style, otherwise the style for new ones.
     var displayedStyle: AnnotationStyle { selectedAnnotation?.style ?? style }
 
+    /// Whether the style picker is styling text (a selected label, or the text tool with nothing
+    /// selected), so it offers fonts and label styles and reads weights as sizes.
+    var isStylingText: Bool { selectedAnnotation.map { $0.kind == .text } ?? (tool == .text) }
+
     /// Changes the style for new annotations and, when one is selected, that annotation (undoably).
     /// Only the parts `change` touches are applied, so picking a color keeps the selection's own weight.
-    /// - Parameter coalescing: live edits (dragging in the color panel) share one undo step per annotation.
-    func updateStyle(coalescing: Bool = false, _ change: (inout AnnotationStyle) -> Void) {
+    /// - Parameters:
+    ///   - coalescing: live edits (dragging in the color panel) share one undo step per annotation.
+    ///   - resettingTextSize: a weight was picked, so a resized label goes back to that weight's size,
+    ///     even when the weight is the one it already has.
+    func updateStyle(coalescing: Bool = false, resettingTextSize: Bool = false, _ change: (inout AnnotationStyle) -> Void) {
         change(&style)
         guard let id = selectedID, let index = annotations.firstIndex(where: { $0.id == id }) else { return }
         var restyled = annotations[index].style
         change(&restyled)
-        guard restyled != annotations[index].style else { return }
-        if !(coalescing && styleEditTarget == id) {
+        let resetsSize = annotations[index].fontSize != nil
+            && (resettingTextSize || restyled.weight != annotations[index].style.weight)
+        guard restyled != annotations[index].style || resetsSize else { return }
+        // A label being typed is restyled inside its edit's undo step.
+        if id != editingTextID, !(coalescing && styleEditTarget == id) {
             checkpoint()
             if coalescing { styleEditTarget = id }
         }
         annotations[index].style = restyled
+        if resetsSize { annotations[index].fontSize = nil }
+    }
+
+    /// Picks a stroke weight (for text, a size preset).
+    func pickWeight(_ weight: StrokeWeight) {
+        updateStyle(resettingTextSize: true) { $0.weight = weight }
     }
 
     /// Ends a run of coalesced style edits, so the next one gets its own undo step.
@@ -102,19 +129,21 @@ final class EditorDocument: ObservableObject {
     }
 
     func deleteSelected() {
-        guard let id = selectedID else { return }
+        guard editingTextID == nil, let id = selectedID else { return }
         checkpoint()
         annotations.removeAll { $0.id == id }
         selectedID = nil
     }
 
     func undo() {
+        endTextEditing()
         guard let snapshot = undoStack.popLast() else { return }
         redoStack.append(Snapshot(annotations: annotations, crop: crop))
         restore(snapshot)
     }
 
     func redo() {
+        endTextEditing()
         guard let snapshot = redoStack.popLast() else { return }
         undoStack.append(Snapshot(annotations: annotations, crop: crop))
         restore(snapshot)
@@ -126,6 +155,60 @@ final class EditorDocument: ObservableObject {
         selectedID = nil
         if tool == .crop { pendingCrop = crop }
         isDirty = true
+    }
+
+    // MARK: - Text
+
+    /// Places an empty label at `origin` (its first line's cap top) and starts typing into it.
+    @discardableResult
+    func beginNewText(at origin: CGPoint) -> UUID {
+        endTextEditing()
+        let annotation = Annotation(kind: .text, start: origin, end: origin, style: style, scale: scale)
+        textEditBaseline = annotations
+        annotations.append(annotation)
+        selectedID = annotation.id
+        editingTextID = annotation.id
+        return annotation.id
+    }
+
+    /// Starts typing into an existing label (double-click, or Return with it selected).
+    func beginEditingText(_ id: UUID) {
+        guard editingTextID != id, annotations.contains(where: { $0.id == id && $0.kind == .text }) else { return }
+        endTextEditing()
+        textEditBaseline = annotations
+        selectedID = id
+        editingTextID = id
+    }
+
+    /// The live text of the label being edited.
+    func setEditingText(_ text: String) {
+        guard let id = editingTextID, let index = annotations.firstIndex(where: { $0.id == id }) else { return }
+        // Pasted text may bring other line endings; labels break lines on \n only.
+        annotations[index].text = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\n")
+    }
+
+    /// Commits the label being edited: an empty one disappears, a changed one becomes one undo step,
+    /// and it stays selected so it can be restyled, moved or resized right away.
+    func endTextEditing() {
+        guard let id = editingTextID else { return }
+        editingTextID = nil
+        let baseline = textEditBaseline ?? annotations
+        textEditBaseline = nil
+        if let index = annotations.firstIndex(where: { $0.id == id }) {
+            if annotations[index].isDegenerate {
+                annotations.remove(at: index)
+                if selectedID == id { selectedID = nil }
+            } else {
+                // Only the end is trimmed: the label is anchored at its first line, so dropping leading
+                // spaces or blank lines would move the text away from where it was typed.
+                annotations[index].text = annotations[index].text.trimmingTrailingWhitespace
+            }
+        }
+        guard annotations != baseline else { return }
+        checkpoint(annotations: baseline)
     }
 
     func applyCrop() {
@@ -163,6 +246,7 @@ final class EditorDocument: ObservableObject {
     }
 
     func copyToClipboard() {
+        endTextEditing()
         if let rendered = render() {
             CaptureOutput.copy(rendered, scale: scale)
         }
@@ -170,6 +254,7 @@ final class EditorDocument: ObservableObject {
 
     /// Writes the edits back to the screenshot file and the clipboard.
     func commit() {
+        endTextEditing()
         guard let rendered = render() else { return }
         CaptureOutput.copy(rendered, scale: scale)
         if let fileURL {
@@ -179,6 +264,7 @@ final class EditorDocument: ObservableObject {
     }
 
     func save(to url: URL) throws {
+        endTextEditing()
         guard let rendered = render() else { throw CocoaError(.fileWriteUnknown) }
         try CaptureOutput.write(rendered, scale: scale, to: url)
     }
@@ -192,5 +278,16 @@ final class EditorDocument: ObservableObject {
               let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path))?[.size] as? Int64
         else { return nil }
         return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
+}
+
+extension String {
+    /// The string without trailing spaces, tabs and newlines.
+    nonisolated var trimmingTrailingWhitespace: String {
+        var scalars = unicodeScalars
+        while let last = scalars.last, CharacterSet.whitespacesAndNewlines.contains(last) {
+            scalars.removeLast()
+        }
+        return String(scalars)
     }
 }

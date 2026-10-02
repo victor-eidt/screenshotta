@@ -1,11 +1,11 @@
 import AppKit
 
 enum EditorTool: String, CaseIterable, Identifiable {
-    case select, crop, arrow, line, rectangle, ellipse, pen
+    case select, crop, arrow, line, rectangle, ellipse, pen, text
 
     var id: String { rawValue }
 
-    static let drawing: [EditorTool] = [.select, .arrow, .line, .rectangle, .ellipse, .pen]
+    static let drawing: [EditorTool] = [.select, .arrow, .line, .rectangle, .ellipse, .pen, .text]
 
     var symbol: String {
         switch self {
@@ -16,6 +16,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .rectangle: "rectangle"
         case .ellipse: "circle"
         case .pen: "scribble"
+        case .text: "textformat"
         }
     }
 
@@ -28,6 +29,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .rectangle: "Rectangle (R)"
         case .ellipse: "Circle (O)"
         case .pen: "Pen (P)"
+        case .text: "Text (T)"
         }
     }
 
@@ -40,6 +42,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .rectangle: "r"
         case .ellipse: "o"
         case .pen: "p"
+        case .text: "t"
         }
     }
 
@@ -50,6 +53,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .rectangle: .rectangle
         case .ellipse: .ellipse
         case .pen: .pen
+        case .text: .text
         case .select, .crop: nil
         }
     }
@@ -58,7 +62,7 @@ enum EditorTool: String, CaseIterable, Identifiable {
 /// A shape drawn on the screenshot. Coordinates are image pixels, top-left origin.
 struct Annotation: Identifiable, Equatable {
     enum Kind {
-        case arrow, line, rectangle, ellipse, pen
+        case arrow, line, rectangle, ellipse, pen, text
     }
 
     var id = UUID()
@@ -70,15 +74,24 @@ struct Annotation: Identifiable, Equatable {
     /// Image pixels per point, so the stroke weight keeps its visual size on Retina captures.
     /// No default: a tool that forgot it would draw at half width on Retina.
     var scale: CGFloat
+    /// The words of a text annotation, which is anchored at `start` (its first line's cap top).
+    var text = ""
+    /// A text size set by resizing, in points. Nil follows the style's weight.
+    var fontSize: CGFloat?
 
     /// Stroke width in image pixels.
     var width: CGFloat { style.weight.points * scale }
+
+    /// Text size in points: a resized label keeps its own, otherwise the weight picks one.
+    var fontPointSize: CGFloat { fontSize ?? style.weight.textPoints }
+    var fontPixelSize: CGFloat { fontPointSize * scale }
 
     var rect: CGRect {
         CGRect(x: min(start.x, end.x), y: min(start.y, end.y), width: abs(end.x - start.x), height: abs(end.y - start.y))
     }
 
     var bounds: CGRect {
+        if kind == .text { return TextLayout(self).plate }
         let base: CGRect
         if kind == .pen, let first = points.first {
             base = points.reduce(CGRect(origin: first, size: .zero)) { $0.union(CGRect(origin: $1, size: .zero)) }
@@ -92,6 +105,7 @@ struct Annotation: Identifiable, Equatable {
     var isDegenerate: Bool {
         switch kind {
         case .pen: points.count < 2
+        case .text: text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         default: hypot(end.x - start.x, end.y - start.y) < width
         }
     }
@@ -105,6 +119,8 @@ struct Annotation: Identifiable, Equatable {
     func hitTest(_ p: CGPoint, tolerance: CGFloat) -> Bool {
         let t = tolerance + width
         switch kind {
+        case .text:
+            return bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(p)
         case .rectangle, .ellipse:
             return rect.insetBy(dx: -t, dy: -t).contains(p)
         case .line, .arrow:
@@ -141,6 +157,7 @@ enum AnnotationRenderer {
 
     /// - Parameter unit: device units per image pixel (shadows ignore the CTM, so they need it).
     static func draw(_ a: Annotation, in ctx: CGContext, unit: CGFloat) {
+        if a.kind == .text { return drawText(a, in: ctx, unit: unit) }
         ctx.saveGState()
         ctx.setShadow(
             offset: CGSize(width: 0, height: -a.width * 0.3 * unit),
@@ -174,6 +191,8 @@ enum AnnotationRenderer {
         case .pen:
             ctx.addPath(smoothPath(a.points))
             ctx.strokePath()
+        case .text:
+            break
         }
         ctx.restoreGState()
     }
