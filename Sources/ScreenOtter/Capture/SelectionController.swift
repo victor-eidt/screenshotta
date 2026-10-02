@@ -8,6 +8,11 @@ struct WindowCandidate: Equatable {
     let frame: CGRect
     /// Global Quartz coordinates (top-left origin), as the Accessibility API reports them.
     let quartzFrame: CGRect
+
+    /// The screen showing most of the window: the one holding its center.
+    var screen: NSScreen? {
+        NSScreen.screens.first { $0.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) }
+    }
 }
 
 /// Runs one screenshot selection: a transparent overlay panel on every screen.
@@ -19,10 +24,11 @@ final class SelectionController {
         case window
     }
 
-    /// A screenshot, or what to record.
+    /// A screenshot, what to record, or where to read text.
     enum Purpose {
         case screenshot
         case recording
+        case text
     }
 
     private(set) var mode: Mode = .area
@@ -43,6 +49,7 @@ final class SelectionController {
         if isActive {
             if self.purpose != purpose {
                 self.purpose = purpose
+                applyCursor()
                 redrawAll()
             }
             if self.mode != mode { toggleMode() }
@@ -93,7 +100,8 @@ final class SelectionController {
     func applyCursor() {
         switch mode {
         case .area: NSCursor.crosshair.set()
-        case .window: Cursors.camera.set()
+        // No photo is taken when reading text, so no camera.
+        case .window: (purpose == .text ? Cursors.textViewfinder : Cursors.camera).set()
         }
     }
 
@@ -110,9 +118,14 @@ final class SelectionController {
             RecordingController.shared.start(.area(rect, screen))
             return
         }
+        let purpose = purpose
         isCapturing = true
         Task {
             defer { isCapturing = false }
+            if purpose == .text {
+                await TextCapture.captureArea(rect, on: screen)
+                return
+            }
             do {
                 let capture = try await CaptureService.captureArea(rect, on: screen)
                 CaptureOutput.deliver(capture, screen: screen)
@@ -130,6 +143,11 @@ final class SelectionController {
         isCapturing = true
         Task {
             defer { isCapturing = false }
+            if purpose == .text {
+                // Window content is captured even when covered, so there's no need to raise it.
+                await TextCapture.captureWindow(candidate)
+                return
+            }
             if Preferences.shared.bringWindowToFront, !isFrontmost {
                 await WindowActivator.bringToFront(candidate)
             }
@@ -139,8 +157,7 @@ final class SelectionController {
             }
             do {
                 let capture = try await CaptureService.captureStyledWindow(candidate.id)
-                let screen = NSScreen.screens.first { $0.frame.contains(CGPoint(x: candidate.frame.midX, y: candidate.frame.midY)) }
-                CaptureOutput.deliver(capture, screen: screen)
+                CaptureOutput.deliver(capture, screen: candidate.screen)
             } catch {
                 CaptureOutput.presentError(error)
             }
@@ -315,15 +332,21 @@ final class OverlayView: NSView {
                 drawHighlight(hovered.frame.offsetBy(dx: -targetScreen.frame.minX, dy: -targetScreen.frame.minY), recording: controller.purpose == .recording)
             }
         }
-        if controller.purpose == .recording, dragStart == nil {
-            drawRecordingHint(controller.mode)
+        if controller.purpose != .screenshot, dragStart == nil {
+            drawHint(controller.purpose, controller.mode)
         }
     }
 
-    private func drawRecordingHint(_ mode: SelectionController.Mode) {
-        let text = switch mode {
-        case .area: "Drag to record an area  ·  Click to record the whole screen  ·  Space for a window  ·  Esc to cancel"
-        case .window: "Click a window to record it  ·  Space for an area  ·  Esc to cancel"
+    private static let textHintSymbol = NSImage(systemSymbolName: "text.viewfinder", accessibilityDescription: nil)?
+        .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold).applying(.init(paletteColors: [.white])))
+
+    /// Recording and text capture say what a drag or a click will do, since it isn't a plain screenshot.
+    private func drawHint(_ purpose: SelectionController.Purpose, _ mode: SelectionController.Mode) {
+        let text = switch (purpose, mode) {
+        case (.text, .area): "Drag over text to copy it  ·  Space for a window  ·  Esc to cancel"
+        case (.text, .window): "Click a window to copy its text  ·  Space for an area  ·  Esc to cancel"
+        case (_, .area): "Drag to record an area  ·  Click to record the whole screen  ·  Space for a window  ·  Esc to cancel"
+        case (_, .window): "Click a window to record it  ·  Space for an area  ·  Esc to cancel"
         }
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
@@ -331,13 +354,19 @@ final class OverlayView: NSView {
         ]
         let string = NSAttributedString(string: text, attributes: attributes)
         let size = string.size()
-        let pill = NSRect(x: (bounds.width - size.width) / 2 - 18, y: bounds.height - size.height - 64, width: size.width + 36, height: size.height + 16)
+        let leading: CGFloat = purpose == .text ? 32 : 26
+        let pill = NSRect(x: (bounds.width - size.width - leading - 18) / 2, y: bounds.height - size.height - 64, width: size.width + leading + 18, height: size.height + 16)
         NSColor(white: 0.08, alpha: 0.8).setFill()
         NSBezierPath(roundedRect: pill, xRadius: pill.height / 2, yRadius: pill.height / 2).fill()
-        let dot = NSRect(x: pill.minX + 13, y: pill.midY - 3.5, width: 7, height: 7)
-        NSColor.systemRed.setFill()
-        NSBezierPath(ovalIn: dot).fill()
-        string.draw(at: NSPoint(x: pill.minX + 26, y: pill.minY + 8))
+        if purpose == .text, let symbol = Self.textHintSymbol {
+            let symbolRect = NSRect(x: pill.minX + 12, y: pill.midY - symbol.size.height / 2, width: symbol.size.width, height: symbol.size.height)
+            symbol.draw(in: symbolRect)
+        } else {
+            let dot = NSRect(x: pill.minX + 13, y: pill.midY - 3.5, width: 7, height: 7)
+            NSColor.systemRed.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+        }
+        string.draw(at: NSPoint(x: pill.minX + leading, y: pill.minY + 8))
     }
 
     private func drawSelection(_ rect: NSRect) {
@@ -353,7 +382,8 @@ final class OverlayView: NSView {
         NSColor(white: 1, alpha: 0.9).setStroke()
         inner.stroke()
 
-        if let current = dragCurrent {
+        // Pixel sizes mean nothing when reading text.
+        if let current = dragCurrent, controller?.purpose != .text {
             drawPill("\(Int(rect.width.rounded())) × \(Int(rect.height.rounded()))", near: current)
         }
     }
