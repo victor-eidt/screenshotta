@@ -125,6 +125,8 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
 
     /// The webcam bubble, for recordings that have one.
     var webcam = WebcamStyle()
+    /// The keystroke pill, for recordings made with keystrokes on.
+    var keystrokes = KeystrokeStyle()
 
     private static let defaultsKey = "recordingStyle"
 
@@ -164,6 +166,7 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
         autoZoom = (try? c.decode(Bool.self, forKey: .autoZoom)) ?? d.autoZoom
         zoomScale = (try? c.decode(Double.self, forKey: .zoomScale)) ?? d.zoomScale
         webcam = (try? c.decode(WebcamStyle.self, forKey: .webcam)) ?? d.webcam
+        keystrokes = (try? c.decode(KeystrokeStyle.self, forKey: .keystrokes)) ?? d.keystrokes
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -171,6 +174,7 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
         case showCursor, cursorStyle, cursorSize, smoothCursor, cursorMotionBlur, hideIdleCursor, clickEffect
         case autoZoom, zoomScale
         case webcam
+        case keystrokes
     }
 }
 
@@ -189,6 +193,8 @@ nonisolated struct RecordingEdits: Codable, Equatable, Sendable {
     var audio: [AudioSource: AudioTrackMix]?
     /// The webcam bubble is turned off in this video. Missing means shown.
     var webcamHidden: Bool?
+    /// The keystroke pill is turned off in this video. Missing means shown.
+    var keystrokesHidden: Bool?
 
     static func initial(duration: Double, clicks: [CursorRecording.Sample], style: RecordingStyle) -> RecordingEdits {
         var edits = RecordingEdits(segments: [ClipSegment(start: 0, end: duration)], zooms: [], style: style)
@@ -208,6 +214,8 @@ nonisolated struct RecordingProject: Sendable {
     var cursorURL: URL { folder.appendingPathComponent("cursor.json") }
     var editsURL: URL { folder.appendingPathComponent("edits.json") }
     var wallpaperURL: URL { folder.appendingPathComponent("wallpaper.png") }
+    /// The keys pressed while recording. Only there when the recording was made with keystrokes on.
+    var keystrokesURL: URL { folder.appendingPathComponent("keys.json") }
 
     func audioURL(_ source: AudioSource) -> URL { folder.appendingPathComponent(source.fileName) }
     func url(of track: RecordedAudioTrack) -> URL { folder.appendingPathComponent(track.file) }
@@ -262,10 +270,12 @@ nonisolated struct RecordingProject: Sendable {
     func loadMetadata() -> RecordingMetadata? { Self.read(metadataURL) }
     func loadCursor() -> CursorRecording { Self.read(cursorURL) ?? CursorRecording() }
     func loadEdits() -> RecordingEdits? { Self.read(editsURL) }
+    func loadKeystrokes() -> KeystrokeRecording? { Self.read(keystrokesURL) }
 
     func save(_ metadata: RecordingMetadata) throws { try Self.write(metadata, to: metadataURL) }
     func save(_ cursor: CursorRecording) throws { try Self.write(cursor, to: cursorURL) }
     func save(_ edits: RecordingEdits) throws { try Self.write(edits, to: editsURL) }
+    func save(_ keystrokes: KeystrokeRecording) throws { try Self.write(keystrokes, to: keystrokesURL) }
 
     private static func read<T: Decodable>(_ url: URL) -> T? {
         guard let data = try? Data(contentsOf: url) else { return nil }

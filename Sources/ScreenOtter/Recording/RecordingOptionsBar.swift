@@ -40,12 +40,22 @@ final class RecordingOptionsModel: ObservableObject {
     @Published var showsCameras = false
     @Published private(set) var cameras: [Webcams.Device] = []
     @Published private(set) var cameraDenied = Webcams.isDenied
+    @Published private(set) var keystrokesBlocked = !KeystrokePermission.isGranted
 
     func refreshDevices() {
         microphones = Microphones.all()
         microphoneDenied = Microphones.isDenied
         cameras = Webcams.all()
         cameraDenied = Webcams.isDenied
+        keystrokesBlocked = !KeystrokePermission.isGranted
+    }
+
+    /// Turns the keystroke overlay on or off; turning it on asks for Input Monitoring the first time.
+    func toggleKeystrokes() {
+        let prefs = Preferences.shared
+        prefs.recordKeystrokes.toggle()
+        if prefs.recordKeystrokes, !KeystrokePermission.isGranted { KeystrokePermission.request() }
+        keystrokesBlocked = !KeystrokePermission.isGranted
     }
 
     /// The camera that will record: the chosen one if it's connected, else the default.
@@ -158,6 +168,14 @@ struct RecordingOptionsView: View {
                         model.showsMicrophones = false
                         model.showsCameras.toggle()
                     }
+                }
+                OptionChip(
+                    symbol: "keyboard",
+                    title: prefs.recordKeystrokes && model.keystrokesBlocked ? "Keystrokes Blocked" : "Keystrokes",
+                    isOn: prefs.recordKeystrokes && !model.keystrokesBlocked,
+                    warning: prefs.recordKeystrokes && model.keystrokesBlocked
+                ) {
+                    model.toggleKeystrokes()
                 }
             }
             .padding(5)

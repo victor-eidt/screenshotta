@@ -608,6 +608,8 @@ private struct RecordingPane: View {
 
             RecordingCameraSection()
 
+            RecordingKeystrokesSection()
+
             SettingsSection("Drafts", footer: "Every recording is a draft: edits save as you go. Reopen, rename, duplicate or trash them from the Drafts window.") {
                 SettingsRow(drafts.drafts.isEmpty ? "No drafts yet" : "\(drafts.drafts.count) draft\(drafts.drafts.count == 1 ? "" : "s")") {
                     Button("Open Drafts") { DraftsWindowController.shared.show() }
@@ -627,6 +629,8 @@ private struct RecordingPane: View {
                 FeatureRow(symbol: "waveform", title: "Audio", detail: "Microphone and system audio on their own tracks, with volume and mute.")
                 RowDivider()
                 FeatureRow(symbol: "person.crop.square", title: "Camera bubble", detail: "A circle, a rounded square or a pebble, in any corner, out of the way while zoomed in.")
+                RowDivider()
+                FeatureRow(symbol: "keyboard", title: "Keystrokes", detail: "The shortcuts you press, on a small glass pill at the bottom of the video.")
             }
         }
         .onAppear { drafts.reload() }
@@ -847,11 +851,49 @@ private struct RecordingCameraSection: View {
     }
 }
 
+/// The keystroke overlay: off by default, shortcuts only unless all keys are asked for.
+private struct RecordingKeystrokesSection: View {
+    @ObservedObject private var prefs = Preferences.shared
+    @State private var granted = KeystrokePermission.isGranted
+
+    var body: some View {
+        SettingsSection(
+            "Keystrokes",
+            footer: "Only shortcuts (keys pressed with ⌘, ⌃ or ⌥) and keys like Return, Esc, Tab and the arrows are kept, unless All keys is on. Nothing is kept while a password field is active."
+        ) {
+            ToggleRow(title: "Keystrokes", detail: "Records the shortcuts you press, to show them in the video.", isOn: Binding(
+                get: { prefs.recordKeystrokes },
+                set: { on in
+                    prefs.recordKeystrokes = on
+                    if on, !KeystrokePermission.isGranted { KeystrokePermission.request() }
+                    granted = KeystrokePermission.isGranted
+                }
+            ))
+            if prefs.recordKeystrokes {
+                RowDivider()
+                if !granted {
+                    SettingsRow("Input Monitoring is off", detail: "macOS needs it to show ScreenOtter your key presses. Recordings go on without keys until it's allowed.") {
+                        Button("Open Settings") { KeystrokePermission.openSettings() }
+                            .buttonStyle(.soft)
+                    }
+                    RowDivider()
+                }
+                ToggleRow(title: "All keys", detail: "Also records what you type, not only shortcuts.", isOn: $prefs.recordAllKeys)
+            }
+        }
+        .onAppear { granted = KeystrokePermission.isGranted }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            granted = KeystrokePermission.isGranted
+        }
+    }
+}
+
 // MARK: - Permissions
 
 private struct PermissionsPane: View {
     @State private var screenRecording = Permissions.screenRecordingGranted
     @State private var accessibility = Permissions.accessibilityGranted
+    @State private var inputMonitoring = KeystrokePermission.isGranted
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -877,11 +919,23 @@ private struct PermissionsPane: View {
                     granted: accessibility,
                     action: Permissions.requestAccessibility
                 )
+                RowDivider()
+                PermissionRow(
+                    title: "Input Monitoring",
+                    detail: "Optional. Shows the shortcuts you press in recordings, when Keystrokes is on.",
+                    symbol: "keyboard",
+                    tint: .orange,
+                    granted: inputMonitoring,
+                    action: {
+                        if !KeystrokePermission.request() { KeystrokePermission.openSettings() }
+                    }
+                )
             }
         }
         .onReceive(timer) { _ in
             screenRecording = Permissions.screenRecordingGranted
             accessibility = Permissions.accessibilityGranted
+            inputMonitoring = KeystrokePermission.isGranted
         }
     }
 }

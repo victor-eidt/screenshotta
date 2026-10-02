@@ -36,6 +36,7 @@ struct RecordingInspector: View {
                     case .clip: ClipPanel(doc: doc)
                     case .audio: AudioPanel(doc: doc)
                     case .webcam: WebcamPanel(doc: doc)
+                    case .keystrokes: KeystrokePanel(doc: doc)
                     }
                 }
                 .padding(18)
@@ -50,7 +51,7 @@ struct RecordingInspector: View {
 
 // MARK: - Bindings
 
-private extension RecordingDocument {
+extension RecordingDocument {
     /// A binding to one style option. Changes made while a slider is held count as one undo step.
     func style<T>(_ keyPath: WritableKeyPath<RecordingStyle, T>) -> Binding<T> {
         Binding(
@@ -579,7 +580,7 @@ private struct WebcamShapeTile: View {
 
 /// A row of equal pills, one selected: the inspector's segmented control. `name` is the full name for
 /// VoiceOver and the tooltip, when `title` is only an abbreviation.
-private struct SegmentedPills<Option: Hashable>: View {
+struct SegmentedPills<Option: Hashable>: View {
     let options: [Option]
     @Binding var selection: Option
     let title: KeyPath<Option, String>
@@ -650,7 +651,7 @@ private extension WebcamCorner {
 
 // MARK: - Controls
 
-private struct InspectorSection<Content: View>: View {
+struct InspectorSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
 
@@ -667,7 +668,7 @@ private struct InspectorSection<Content: View>: View {
     }
 }
 
-private struct InspectorToggle: View {
+struct InspectorToggle: View {
     let title: String
     var detail: String?
     @Binding var isOn: Bool

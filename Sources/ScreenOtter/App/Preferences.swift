@@ -66,6 +66,8 @@ final class Preferences: ObservableObject {
         static let recordSystemAudio = "recordSystemAudio"
         static let recordCamera = "recordCamera"
         static let cameraID = "cameraID"
+        static let recordKeystrokes = "recordKeystrokes"
+        static let recordAllKeys = "recordAllKeys"
     }
 
     static let defaultFolder = FileManager.default
@@ -94,6 +96,10 @@ final class Preferences: ObservableObject {
     @Published var recordCamera: Bool { didSet { defaults.set(recordCamera, forKey: Key.recordCamera) } }
     /// The camera's unique ID; nil follows the system's default camera.
     @Published var cameraID: String? { didSet { defaults.set(cameraID, forKey: Key.cameraID) } }
+    /// Keeps the keys pressed while recording, for the keystroke overlay.
+    @Published var recordKeystrokes: Bool { didSet { defaults.set(recordKeystrokes, forKey: Key.recordKeystrokes) } }
+    /// Keeps typing too, not only shortcuts and special keys.
+    @Published var recordAllKeys: Bool { didSet { defaults.set(recordAllKeys, forKey: Key.recordAllKeys) } }
 
     @Published var shakeToOpenShelf: Bool {
         didSet {
@@ -163,6 +169,9 @@ final class Preferences: ObservableObject {
         recordMicrophone = defaults.bool(forKey: Key.recordMicrophone)
         recordSystemAudio = defaults.bool(forKey: Key.recordSystemAudio)
         recordCamera = defaults.bool(forKey: Key.recordCamera)
+        // Keys are private: off until asked for, and shortcuts only unless all keys are asked for too.
+        recordKeystrokes = defaults.bool(forKey: Key.recordKeystrokes)
+        recordAllKeys = defaults.bool(forKey: Key.recordAllKeys)
         _cameraID = Published(initialValue: defaults.string(forKey: Key.cameraID))
         _microphoneID = Published(initialValue: defaults.string(forKey: Key.microphoneID))
         // Optionals are already initialized to nil, so a plain assignment here would run didSet.

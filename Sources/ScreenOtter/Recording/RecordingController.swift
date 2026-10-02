@@ -35,6 +35,9 @@ final class RecordingController: ObservableObject {
         let recorder: ScreenRecorder
         let tracker: CursorTracker
         let webcam: WebcamSession?
+        let keys: KeystrokeTracker?
+        /// Keystrokes were on but macOS refused the key tap: the draft says so instead of claiming no keys.
+        let keysBlocked: Bool
     }
 
     private var session: Session?
@@ -97,6 +100,10 @@ final class RecordingController: ObservableObject {
             // The camera too, and it starts now so its bubble is up (and its exposure settled) by the first frame.
             let screen = NSScreen.screens.first { $0.frame.contains(setup.countdownCenter) }
             webcam = await WebcamSession.start(writingTo: project.webcamURL, on: screen)
+            // Input Monitoring for the keystroke overlay: macOS prompts once; without it, no keys are kept.
+            if Preferences.shared.recordKeystrokes, !KeystrokePermission.isGranted {
+                KeystrokePermission.request()
+            }
 
             if Preferences.shared.recordingCountdown {
                 state = .countingDown
@@ -117,12 +124,18 @@ final class RecordingController: ObservableObject {
             }
             let tracker = CursorTracker(locate: setup.locate)
             tracker.start()
+            var keys: KeystrokeTracker?
+            if Preferences.shared.recordKeystrokes {
+                let candidate = KeystrokeTracker(allKeys: Preferences.shared.recordAllKeys)
+                if candidate.start() { keys = candidate }
+            }
             // Rolling a moment before the screen: frames from before its first one are trimmed in the editor.
             webcam?.beginWriting()
             do {
                 try await recorder.start()
             } catch {
                 _ = tracker.stop(start: 0, duration: 0)
+                keys?.cancel()
                 throw error
             }
 
@@ -134,7 +147,10 @@ final class RecordingController: ObservableObject {
                 scale: setup.scale,
                 duration: 0
             )
-            session = Session(project: project, metadata: metadata, recorder: recorder, tracker: tracker, webcam: webcam)
+            session = Session(
+                project: project, metadata: metadata, recorder: recorder, tracker: tracker, webcam: webcam,
+                keys: keys, keysBlocked: Preferences.shared.recordKeystrokes && keys == nil
+            )
             state = .recording(since: Date())
             if let outline = setup.outline {
                 border = RecordingBorderPanel(around: outline)
@@ -286,11 +302,17 @@ final class RecordingController: ObservableObject {
                 metadata.webcam = await session.webcam?.finish(screenStart: result.startHostTime)
                 try session.project.save(metadata)
                 try session.project.save(cursor)
+                if let keys = session.keys {
+                    try session.project.save(keys.stop(start: result.startHostTime, duration: result.duration, ignoring: Preferences.shared.recordShortcut))
+                } else if session.keysBlocked {
+                    try session.project.save(KeystrokeRecording(allKeys: Preferences.shared.recordAllKeys, blocked: true))
+                }
                 try session.project.save(RecordingEdits.initial(duration: result.duration, clicks: cursor.clicks, style: .lastUsed))
                 RecordingEditorWindowController.open(session.project)
                 DraftsLibrary.shared.reload()
             } catch {
                 _ = session.tracker.stop(start: 0, duration: 0)
+                session.keys?.cancel()
                 session.webcam?.cancel()
                 try? FileManager.default.removeItem(at: session.project.folder)
                 CaptureOutput.presentError(error)

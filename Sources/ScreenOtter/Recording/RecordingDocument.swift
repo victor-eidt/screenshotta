@@ -3,7 +3,7 @@ import AVFoundation
 import Combine
 
 enum RecordingInspectorTab: String, CaseIterable, Identifiable {
-    case background, cursor, zoom, clip, audio, webcam
+    case background, cursor, zoom, clip, audio, webcam, keystrokes
 
     var id: String { rawValue }
 
@@ -15,6 +15,7 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .clip: "Clip"
         case .audio: "Audio"
         case .webcam: "Camera"
+        case .keystrokes: "Keystrokes"
         }
     }
 
@@ -26,6 +27,7 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .clip: "film"
         case .audio: "waveform"
         case .webcam: "person.crop.square"
+        case .keystrokes: "keyboard"
         }
     }
 }
@@ -62,6 +64,8 @@ final class RecordingDocument: ObservableObject {
     let project: RecordingProject
     @Published private(set) var metadata: RecordingMetadata
     let cursor: CursorRecording
+    /// The keys pressed while recording, when it was made with keystrokes on.
+    let keystrokes: KeystrokeRecording?
     let wallpaper: CGImage?
     let player = AVPlayer()
 
@@ -124,6 +128,7 @@ final class RecordingDocument: ObservableObject {
         let size = try await track.load(.naturalSize)
         let duration = try await asset.load(.duration).seconds
         let cursor = project.loadCursor()
+        let keystrokes = project.loadKeystrokes()
         var edits = project.loadEdits() ?? .initial(duration: duration, clicks: cursor.clicks, style: .lastUsed)
         let wallpaper = CGImageSourceCreateWithURL(project.wallpaperURL as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
 
@@ -163,14 +168,14 @@ final class RecordingDocument: ObservableObject {
             }
         }
         return RecordingDocument(
-            project: project, metadata: metadata, cursor: cursor, edits: edits, asset: asset, track: track,
+            project: project, metadata: metadata, cursor: cursor, keystrokes: keystrokes, edits: edits, asset: asset, track: track,
             trackDuration: duration, sourceSize: size, wallpaper: wallpaper, firstFrame: firstFrame,
             audio: audio, webcam: webcam
         )
     }
 
     private init(
-        project: RecordingProject, metadata: RecordingMetadata, cursor: CursorRecording, edits: RecordingEdits,
+        project: RecordingProject, metadata: RecordingMetadata, cursor: CursorRecording, keystrokes: KeystrokeRecording?, edits: RecordingEdits,
         asset: AVURLAsset, track: AVAssetTrack, trackDuration: Double, sourceSize: CGSize, wallpaper: CGImage?, firstFrame: CGImage?,
         audio: [(track: RecordedAudioTrack, asset: AVURLAsset, source: SourceAudio)],
         webcam: (asset: AVURLAsset, source: SourceWebcam)?
@@ -179,6 +184,7 @@ final class RecordingDocument: ObservableObject {
         self.project = project
         self.metadata = metadata
         self.cursor = cursor
+        self.keystrokes = keystrokes
         self.edits = edits
         self.wallpaper = wallpaper
         sourceAsset = asset
@@ -365,7 +371,8 @@ final class RecordingDocument: ObservableObject {
         return RenderScene(
             style: style, motion: motion, pointSize: metadata.pointSize,
             sourceSize: sourceSize, wallpaper: wallpaper, customBackground: loadCustomBackground(style.background),
-            frame: frame, webcam: showsWebcam ? style.webcam : nil
+            frame: frame, webcam: showsWebcam ? style.webcam : nil,
+            keystrokes: showsKeystrokes ? keystrokes.map { KeystrokeOverlay(events: $0.events, style: style.keystrokes) } : nil
         )
     }
 
@@ -553,6 +560,18 @@ final class RecordingDocument: ObservableObject {
         var position = WebcamLayout.position(origin: CGPoint(x: origin.x * k, y: origin.y * k), style: edits.style.webcam, canvas: canvas)
         if snap { position = WebcamLayout.snapped(position) }
         update { $0.style.webcam.x = position.x; $0.style.webcam.y = position.y }
+    }
+
+    // MARK: - Keystrokes
+
+    /// The recording was made with keystrokes on (it may still have none, if no shortcut was pressed).
+    var hasKeystrokes: Bool { keystrokes != nil }
+
+    /// The pill is drawn: there are keys, and it isn't turned off for this video.
+    var showsKeystrokes: Bool { !(keystrokes?.events.isEmpty ?? true) && edits.keystrokesHidden != true }
+
+    func setKeystrokesVisible(_ visible: Bool) {
+        update { $0.keystrokesHidden = visible ? nil : true }
     }
 
     // MARK: - Clips

@@ -14,6 +14,8 @@ nonisolated struct RenderScene: @unchecked Sendable {
     var frame: RecordingFrame?
     /// The webcam bubble's look, or nil when there's no bubble to draw.
     var webcam: WebcamStyle?
+    /// The keystroke pill, or nil when there are no keys to show.
+    var keystrokes: KeystrokeOverlay?
 
     /// The recording as framed: cut at the sides, and with its title bar replaced.
     var contentSize: CGSize { frame?.size(of: sourceSize) ?? sourceSize }
@@ -63,6 +65,8 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
     private let lock = NSLock()
     private var scene: RenderScene
     private var backdrop: (key: String, image: CIImage)?
+    /// The keystroke pills for the cut last drawn.
+    private var keystrokeGroups: (segments: [ClipSegment], events: [KeystrokeEvent], groups: [KeystrokeGroup])?
 
     init(scene: RenderScene) {
         self.scene = scene
@@ -143,7 +147,25 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
            let bubble = WebcamArt.bubble(camera: webcam, style: style, canvas: renderSize, zoomScale: camera.scale) {
             image = bubble.composited(over: image).cropped(to: CGRect(origin: .zero, size: renderSize))
         }
+        if let overlay = scene.keystrokes,
+           let pill = KeystrokeArt.overlay(
+               groups: keystrokeGroups(overlay, timeline: timeline), style: overlay.style, at: outputTime,
+               backdrop: image, canvas: renderSize,
+               content: CGRect(x: rect.minX, y: renderSize.height - rect.maxY, width: rect.width, height: rect.height)
+           ) {
+            image = pill.composited(over: image).cropped(to: CGRect(origin: .zero, size: renderSize))
+        }
         return image
+    }
+
+    /// The pills follow the cut being drawn, so they're regrouped only when it changes.
+    private func keystrokeGroups(_ overlay: KeystrokeOverlay, timeline: ClipTimeline) -> [KeystrokeGroup] {
+        if let cached = lock.withLock({ keystrokeGroups }), cached.segments == timeline.segments, cached.events == overlay.events {
+            return cached.groups
+        }
+        let groups = KeystrokeTimeline.groups(overlay.events, timeline: timeline)
+        lock.withLock { keystrokeGroups = (timeline.segments, overlay.events, groups) }
+        return groups
     }
 
     /// The video frame cut at its edges and with its title bar replaced, when framed; origin at zero either way.
