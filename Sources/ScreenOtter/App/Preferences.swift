@@ -61,6 +61,7 @@ final class Preferences: ObservableObject {
         static let windowShortcut = "windowShortcut"
         static let shelfShortcut = "shelfShortcut"
         static let recordShortcut = "recordShortcut"
+        static let textShortcut = "textShortcut"
         static let recordingCountdown = "recordingCountdown"
         static let shakeToOpenShelf = "shakeToOpenShelf"
     }
@@ -128,6 +129,13 @@ final class Preferences: ObservableObject {
         }
     }
 
+    @Published var textShortcut: Shortcut? {
+        didSet {
+            storeShortcut(textShortcut, forKey: Key.textShortcut)
+            HotKeyManager.shared.reloadCaptureShortcuts()
+        }
+    }
+
     private init() {
         defaults.register(defaults: [
             Key.saveToFolder: true,
@@ -164,11 +172,16 @@ final class Preferences: ObservableObject {
         _windowShortcut = Published(initialValue: Self.loadShortcut(Key.windowShortcut, from: defaults, default: .defaultWindow))
         _shelfShortcut = Published(initialValue: Self.loadShortcut(Key.shelfShortcut, from: defaults, default: .defaultShelf))
         _recordShortcut = Published(initialValue: Self.loadShortcut(Key.recordShortcut, from: defaults, default: .defaultRecord))
+        _textShortcut = Published(initialValue: Self.loadShortcut(Key.textShortcut, from: defaults, default: .defaultText))
+    }
+
+    private static func loadShortcut(_ key: String, from defaults: UserDefaults, default fallback: Shortcut) -> Shortcut? {
+        decodeShortcut(defaults.data(forKey: key), default: fallback)
     }
 
     /// A missing key means "never configured" (use the default); empty data means "cleared by the user".
-    private static func loadShortcut(_ key: String, from defaults: UserDefaults, default fallback: Shortcut) -> Shortcut? {
-        guard let data = defaults.data(forKey: key) else { return fallback }
+    nonisolated static func decodeShortcut(_ data: Data?, default fallback: Shortcut) -> Shortcut? {
+        guard let data else { return fallback }
         if data.isEmpty { return nil }
         return try? JSONDecoder().decode(Shortcut.self, from: data)
     }

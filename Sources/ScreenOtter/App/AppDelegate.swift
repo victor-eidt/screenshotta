@@ -112,6 +112,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         prefs.windowShortcut?.apply(to: window)
         menu.addItem(window)
 
+        let text = NSMenuItem(title: "Capture Text", action: #selector(captureText), keyEquivalent: "")
+        text.image = NSImage(systemSymbolName: "text.viewfinder", accessibilityDescription: nil)
+        prefs.textShortcut?.apply(to: text)
+        menu.addItem(text)
+
         let record = NSMenuItem(title: "Record Screen", action: #selector(toggleRecording), keyEquivalent: "")
         record.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
         prefs.recordShortcut?.apply(to: record)
@@ -253,6 +258,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func captureWindow() {
         SelectionController.shared.begin(.window)
+    }
+
+    @objc private func captureText() {
+        SelectionController.shared.begin(.area, purpose: .text)
     }
 
     @objc private func openFolder() {

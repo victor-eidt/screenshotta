@@ -9,6 +9,8 @@ nonisolated struct Shortcut: Codable, Equatable, Sendable {
     static let defaultWindow = Shortcut(keyCode: UInt32(kVK_ANSI_5), carbonModifiers: UInt32(optionKey | shiftKey))
     static let defaultShelf = Shortcut(keyCode: UInt32(kVK_ANSI_D), carbonModifiers: UInt32(optionKey | shiftKey))
     static let defaultRecord = Shortcut(keyCode: UInt32(kVK_ANSI_6), carbonModifiers: UInt32(optionKey | shiftKey))
+    /// T for Text. A digit would take a character people type: ⌥⇧2 is € on US and ABC, ” on German.
+    static let defaultText = Shortcut(keyCode: UInt32(kVK_ANSI_T), carbonModifiers: UInt32(optionKey | shiftKey))
 
     init(keyCode: UInt32, carbonModifiers: UInt32) {
         self.keyCode = keyCode

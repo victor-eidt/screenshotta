@@ -369,10 +369,15 @@ private struct GeneralPane: View {
                 QuickAction(title: "Capture Window", symbol: "macwindow", tint: .purple, shortcut: prefs.windowShortcut) {
                     SelectionController.shared.begin(.window)
                 }
+                QuickAction(title: "Capture Text", symbol: "text.viewfinder", tint: .teal, shortcut: prefs.textShortcut) {
+                    SelectionController.shared.begin(.area, purpose: .text)
+                }
                 QuickAction(title: "Record Screen", symbol: "record.circle", tint: .red, shortcut: prefs.recordShortcut) {
                     RecordingController.shared.toggle()
                 }
             }
+            // One height for every card, so a title that wraps doesn't knock its neighbors out of line.
+            .fixedSize(horizontal: false, vertical: true)
 
             SettingsSection("Behavior", footer: "ScreenOtter lives in the menu bar: click the otter there, or use the shortcuts from any app.") {
                 SettingsRow("Launch at login") {
@@ -427,11 +432,12 @@ private struct QuickAction: View {
                     Text(title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
+                    Spacer(minLength: 0)
                     ShortcutBadge(shortcut: shortcut)
                         .frame(height: 18)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(14)
             .settingsCard(radius: 14)
             .overlay(
@@ -703,6 +709,8 @@ private struct ShortcutsPane: View {
                 ShortcutRow(title: "Capture Area", symbol: "rectangle.dashed", shortcut: $prefs.areaShortcut, conflict: hotKeys.conflicts.contains(.area))
                 RowDivider()
                 ShortcutRow(title: "Capture Window", symbol: "macwindow", shortcut: $prefs.windowShortcut, conflict: hotKeys.conflicts.contains(.window))
+                RowDivider()
+                ShortcutRow(title: "Capture Text", symbol: "text.viewfinder", shortcut: $prefs.textShortcut, conflict: hotKeys.conflicts.contains(.text))
                 RowDivider()
                 ShortcutRow(title: "Record Screen", symbol: "record.circle", shortcut: $prefs.recordShortcut, conflict: hotKeys.conflicts.contains(.record))
                 RowDivider()

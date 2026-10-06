@@ -6,6 +6,7 @@ A macOS menu bar app for screenshots and screen recordings. A sea otter keeps it
 
 - **Capture Area** (default `⌥⇧4`): crosshair, drag a rectangle, done. Full-bleed, no frame.
 - **Capture Window** (default `⌥⇧5`): hover a window and click. The window keeps its rounded corners and sits on your desktop wallpaper with a very subtle shadow, ready for demos. Traffic lights are always in color: if the window was inactive, the gray ones are repainted. Like window recordings, the shot can swap the app's own top bar for a thin, plain one with just the traffic lights, and cut the window's sides: from the window button in the editor (the minimal title bar is remembered for the next shots, and also lives in Settings › Window).
+- **Capture Text** (default `⌥⇧T`): drag over any text on screen (or press Space and click a window) and it lands on your clipboard as plain text. Recognition runs on device and detects the language by itself. Line breaks, lists and paragraphs come out the way you read them, sidebars and columns one after the other, tables row by row with tabs between cells. A small glass toast confirms what was copied; nothing is saved to disk.
 - While selecting, **Space** switches between area and window mode and **Esc** cancels.
 - Every capture is copied to the clipboard and saved to `~/Pictures/Screenshots` (configurable).
 - A small thumbnail slides in at the bottom right: **click** to edit, **drag** into any app, or **swipe** it away.
@@ -48,6 +49,7 @@ ScreenOtter used to be called Screenshotta. It keeps the old bundle identifier, 
 ## Layout
 
 - `Sources/ScreenOtter/Capture`: selection overlay, ScreenCaptureKit capture, window styling, output
+- `Sources/ScreenOtter/TextCapture`: Capture Text (Vision text recognition, reading-order layout, the confirmation toast)
 - `Sources/ScreenOtter/Thumbnail`: the floating post-capture preview
 - `Sources/ScreenOtter/Editor`: crop and annotation editor
 - `Sources/ScreenOtter/Shelf`: floating shelves, their history and shake-to-open

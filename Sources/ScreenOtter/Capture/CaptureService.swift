@@ -88,21 +88,10 @@ enum CaptureService {
 
     static func captureStyledWindow(_ windowID: CGWindowID) async throws -> CapturedImage {
         let content = try await shareableContent()
-        guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
-            throw CaptureError.windowNotFound
-        }
-
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        let scale = CGFloat(filter.pointPixelScale)
-        let config = SCStreamConfiguration()
-        config.width = max(1, Int((window.frame.width * scale).rounded()))
-        config.height = max(1, Int((window.frame.height * scale).rounded()))
-        config.showsCursor = false
-        config.ignoreShadowsSingleWindow = true
-        config.shouldBeOpaque = false
-        config.captureResolution = .best
-        let rawWindow = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-        let windowImage = TrafficLights.colorize(rawWindow, scale: scale) ?? rawWindow
+        let window = try self.window(windowID, in: content)
+        let raw = try await captureWindowImage(window)
+        let scale = raw.scale
+        let windowImage = TrafficLights.colorize(raw.image, scale: scale) ?? raw.image
 
         let center = CGPoint(x: window.frame.midX, y: window.frame.midY)
         guard let display = content.displays.first(where: { $0.frame.contains(center) })
@@ -132,6 +121,33 @@ enum CaptureService {
         )
         let frame = shot.frame(minimalTitleBar: prefs.windowMinimalTitleBar, barColor: prefs.windowBarColor)
         return CapturedImage(image: shot.compose(frame) ?? windowImage, scale: scale, window: (shot, frame))
+    }
+
+    /// The window on its own, as it draws itself: no shadow, no styling, transparent around its corners.
+    static func captureWindowImage(_ windowID: CGWindowID) async throws -> CapturedImage {
+        let content = try await shareableContent()
+        return try await captureWindowImage(try window(windowID, in: content))
+    }
+
+    private static func captureWindowImage(_ window: SCWindow) async throws -> CapturedImage {
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let scale = CGFloat(filter.pointPixelScale)
+        let config = SCStreamConfiguration()
+        config.width = max(1, Int((window.frame.width * scale).rounded()))
+        config.height = max(1, Int((window.frame.height * scale).rounded()))
+        config.showsCursor = false
+        config.ignoreShadowsSingleWindow = true
+        config.shouldBeOpaque = false
+        config.captureResolution = .best
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        return CapturedImage(image: image, scale: scale)
+    }
+
+    private static func window(_ windowID: CGWindowID, in content: SCShareableContent) throws -> SCWindow {
+        guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
+            throw CaptureError.windowNotFound
+        }
+        return window
     }
 
     /// The display's desktop picture at `scale`: captured live, or read from its file.
