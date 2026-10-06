@@ -34,6 +34,15 @@ import Testing
         #expect(shot.contentOrigin(shot.frame(minimalTitleBar: true)) == CGPoint(x: 20, y: 20 + 60 - 104))
     }
 
+    @Test func minimalTitleBarTakesAChosenColor() throws {
+        let shot = Self.shot()
+        let image = try #require(shot.compose(shot.frame(minimalTitleBar: true, barColor: 0x2B2B2D)))
+        #expect(Self.near(Self.pixel(image, x: 600, y: 20 + 30), (0x2B, 0x2B, 0x2D)))
+        // Auto still knows what it would have picked.
+        let auto = try #require(shot.sampledBarColor(shot.frame(minimalTitleBar: true)))
+        #expect(abs((auto.components?[2] ?? 0) - 230.0 / 255) < 0.02)
+    }
+
     @Test func cutsTheSides() throws {
         let shot = Self.shot()
         let frame = WindowFrame(minimalTitleBar: false, top: 52, left: 20, right: 30)

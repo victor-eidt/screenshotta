@@ -227,12 +227,13 @@ final class RecordingDocument: ObservableObject {
 
     // MARK: - Editing
 
-    /// Applies a change as one undo step, or as part of the current drag.
-    func update(_ change: (inout RecordingEdits) -> Void) {
+    /// Applies a change as one undo step, or as part of the current drag. `continuing` changes carry on the
+    /// one just made (the color panel sends a stream of them) and share its undo step.
+    func update(continuing: Bool = false, _ change: (inout RecordingEdits) -> Void) {
         var new = edits
         change(&new)
         guard new != edits else { return }
-        if !isInteracting { checkpoint() }
+        if !isInteracting, !continuing { checkpoint() }
         apply(new)
     }
 
@@ -369,12 +370,15 @@ final class RecordingDocument: ObservableObject {
             }
             frame.top = (trim * scale).rounded()
             frame.bar = (RecordingFrame.barHeight * scale).rounded()
-            frame.barColor = chromeColors?.bar
+            frame.barColor = edits.style.windowBarColor.map(BackgroundArt.cgColor) ?? chromeColors?.bar
             frame.fillColor = chromeColors?.fill
         }
         guard frame.left > 0 || frame.right > 0 || frame.bar > 0 else { return nil }
         return frame
     }
+
+    /// The color the minimal title bar takes on its own: what's right under the cut.
+    var sampledWindowBarColor: CGColor? { chromeColors?.bar }
 
     /// The recording's size as framed (in video pixels).
     private var contentSize: CGSize {

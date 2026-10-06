@@ -128,14 +128,14 @@ final class EditorDocument: ObservableObject {
     // MARK: - Window frame
 
     /// Frames the window anew; the image follows as soon as it's composed, off the main thread so sliders
-    /// stay smooth. Call `checkpoint()` first, once per gesture. The minimal title bar is remembered for
-    /// the next window shots.
+    /// stay smooth. Call `checkpoint()` first, once per gesture. The minimal title bar and its color are
+    /// remembered for the next window shots.
     func setWindowFrame(_ frame: WindowFrame) {
         guard windowShot != nil, frame != windowFrame else { return }
         windowFrame = frame
-        if Preferences.shared.windowMinimalTitleBar != frame.minimalTitleBar {
-            Preferences.shared.windowMinimalTitleBar = frame.minimalTitleBar
-        }
+        let prefs = Preferences.shared
+        if prefs.windowMinimalTitleBar != frame.minimalTitleBar { prefs.windowMinimalTitleBar = frame.minimalTitleBar }
+        if prefs.windowBarColor != frame.barColor { prefs.windowBarColor = frame.barColor }
         composeLatest()
     }
 

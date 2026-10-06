@@ -55,6 +55,7 @@ final class Preferences: ObservableObject {
         static let windowCornerRadius = "windowCornerRadius"
         static let windowShadow = "windowShadow"
         static let windowMinimalTitleBar = "windowMinimalTitleBar"
+        static let windowBarColor = "windowBarColor"
         static let bringWindowToFront = "bringWindowToFront"
         static let areaShortcut = "areaShortcut"
         static let windowShortcut = "windowShortcut"
@@ -83,6 +84,12 @@ final class Preferences: ObservableObject {
     @Published var windowShadow: Bool { didSet { defaults.set(windowShadow, forKey: Key.windowShadow) } }
     /// Window shots swap the app's own top bar for a thin plain one with just the traffic lights.
     @Published var windowMinimalTitleBar: Bool { didSet { defaults.set(windowMinimalTitleBar, forKey: Key.windowMinimalTitleBar) } }
+    /// That bar's color (0xRRGGBB), or nil for the color found right under it.
+    @Published var windowBarColor: UInt32? {
+        didSet {
+            if let windowBarColor { defaults.set(Int(windowBarColor), forKey: Key.windowBarColor) } else { defaults.removeObject(forKey: Key.windowBarColor) }
+        }
+    }
     @Published var bringWindowToFront: Bool { didSet { defaults.set(bringWindowToFront, forKey: Key.bringWindowToFront) } }
     @Published var recordingCountdown: Bool { didSet { defaults.set(recordingCountdown, forKey: Key.recordingCountdown) } }
 
@@ -148,6 +155,7 @@ final class Preferences: ObservableObject {
         windowCornerRadius = defaults.double(forKey: Key.windowCornerRadius)
         windowShadow = defaults.bool(forKey: Key.windowShadow)
         windowMinimalTitleBar = defaults.bool(forKey: Key.windowMinimalTitleBar)
+        windowBarColor = (defaults.object(forKey: Key.windowBarColor) as? Int).map(UInt32.init)
         bringWindowToFront = defaults.bool(forKey: Key.bringWindowToFront)
         shakeToOpenShelf = defaults.bool(forKey: Key.shakeToOpenShelf)
         recordingCountdown = defaults.bool(forKey: Key.recordingCountdown)

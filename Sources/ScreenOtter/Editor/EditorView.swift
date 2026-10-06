@@ -228,6 +228,13 @@ private struct WindowFramePanel: View {
                 detail: "Swaps the app's own top bar for a thin, plain one with just the traffic lights, so every window looks alike.",
                 isOn: Binding(get: { minimal }, set: { on in change { $0.minimalTitleBar = on } })
             )
+            InspectorBarColor(color: doc.windowFrame?.barColor, sampled: doc.windowFrame.flatMap(shot.sampledBarColor)) { [weak doc] color, continuing in
+                guard let doc, var frame = doc.windowFrame else { return }
+                frame.barColor = color
+                if !continuing { doc.checkpoint() }
+                doc.setWindowFrame(frame)
+            }
+            .disabled(!minimal)
             InspectorSection("Cut") {
                 VStack(alignment: .leading, spacing: 14) {
                     InspectorSlider(

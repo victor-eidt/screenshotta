@@ -7,6 +7,8 @@ nonisolated struct WindowFrame: Equatable, Sendable {
     var top: Double
     var left: Double = 0
     var right: Double = 0
+    /// The minimal title bar's color (0xRRGGBB), or nil for the color found right under it.
+    var barColor: UInt32?
 }
 
 /// A window screenshot kept apart from its background, so the editor can frame it and compose it again.
@@ -37,8 +39,17 @@ nonisolated struct WindowShot: @unchecked Sendable {
     /// The most that can be cut from each side, in points.
     var maximumSideCut: Double { (Double(frameInDisplay.width) * 0.4).rounded() }
 
-    func frame(minimalTitleBar: Bool) -> WindowFrame {
-        WindowFrame(minimalTitleBar: minimalTitleBar, top: titleBarHeight)
+    func frame(minimalTitleBar: Bool, barColor: UInt32? = nil) -> WindowFrame {
+        WindowFrame(minimalTitleBar: minimalTitleBar, top: titleBarHeight, barColor: barColor)
+    }
+
+    /// The color the minimal title bar takes on its own: what's right under the cut.
+    func sampledBarColor(_ frame: WindowFrame) -> CGColor? {
+        WindowChromeArt.dominantColor(of: window, row: Int((cutTop(frame) + 2) * scale))
+    }
+
+    private func cutTop(_ frame: WindowFrame) -> Double {
+        min(max(frame.top, 0), Double(frameInDisplay.height) / 2)
     }
 
     /// The window framed and put on its background.
@@ -81,12 +92,11 @@ nonisolated struct WindowShot: @unchecked Sendable {
         let right = (min(frame.right, maximumSideCut) * scale).rounded()
         var framing = RecordingFrame(left: left, right: right, scale: scale)
         if frame.minimalTitleBar {
-            let top = min(max(frame.top, 0), Double(frameInDisplay.height) / 2)
-            framing.top = (top * scale).rounded()
+            framing.top = (cutTop(frame) * scale).rounded()
             framing.bar = (RecordingFrame.barHeight * scale).rounded()
-            // The bar takes the color right under the cut; the window's own rounded corners are filled with
-            // the color along its bottom, so all four follow the chosen corner radius.
-            framing.barColor = WindowChromeArt.dominantColor(of: window, row: Int((top + 2) * scale)) ?? CGColor(gray: 0.93, alpha: 1)
+            // The bar takes the chosen color, or the one right under the cut; the window's own rounded corners
+            // are filled with the color along its bottom, so all four follow the chosen corner radius.
+            framing.barColor = frame.barColor.map(BackgroundArt.cgColor) ?? sampledBarColor(frame) ?? CGColor(gray: 0.93, alpha: 1)
             framing.fillColor = WindowChromeArt.dominantColor(of: window, row: window.height - Int(4 * scale)) ?? framing.barColor
         }
         guard framing.left > 0 || framing.right > 0 || framing.bar > 0 else { return nil }

@@ -130,7 +130,7 @@ enum CaptureService {
             displaySize: display.frame.size,
             style: style
         )
-        let frame = shot.frame(minimalTitleBar: prefs.windowMinimalTitleBar)
+        let frame = shot.frame(minimalTitleBar: prefs.windowMinimalTitleBar, barColor: prefs.windowBarColor)
         return CapturedImage(image: shot.compose(frame) ?? windowImage, scale: scale, window: (shot, frame))
     }
 

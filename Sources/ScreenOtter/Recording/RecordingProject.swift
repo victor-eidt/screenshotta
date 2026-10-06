@@ -103,6 +103,8 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
     var aspect: RecordingAspect = .auto
     /// Window recordings: replace the app's own title bar with a thin plain one.
     var minimalWindowFrame = true
+    /// That bar's color (0xRRGGBB), or nil for the color found right under it.
+    var windowBarColor: UInt32?
 
     var showCursor = true
     var cursorStyle: CursorStyle = .arrow
@@ -143,6 +145,7 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
         shadow = (try? c.decode(Double.self, forKey: .shadow)) ?? d.shadow
         aspect = (try? c.decode(RecordingAspect.self, forKey: .aspect)) ?? d.aspect
         minimalWindowFrame = (try? c.decode(Bool.self, forKey: .minimalWindowFrame)) ?? d.minimalWindowFrame
+        windowBarColor = try? c.decodeIfPresent(UInt32.self, forKey: .windowBarColor)
         showCursor = (try? c.decode(Bool.self, forKey: .showCursor)) ?? d.showCursor
         cursorStyle = (try? c.decode(CursorStyle.self, forKey: .cursorStyle)) ?? d.cursorStyle
         cursorSize = (try? c.decode(Double.self, forKey: .cursorSize)) ?? d.cursorSize
@@ -155,7 +158,7 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case background, backgroundBlur, padding, cornerRadius, shadow, aspect, minimalWindowFrame
+        case background, backgroundBlur, padding, cornerRadius, shadow, aspect, minimalWindowFrame, windowBarColor
         case showCursor, cursorStyle, cursorSize, smoothCursor, cursorMotionBlur, hideIdleCursor, clickEffect
         case autoZoom, zoomScale
     }

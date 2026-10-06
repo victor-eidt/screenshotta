@@ -541,7 +541,7 @@ private struct WindowStylePane: View {
                 RowDivider()
                 ToggleRow(
                     title: "Minimal title bar",
-                    detail: "Swaps the app's own top bar for a thin, plain one with just the traffic lights. The editor can change it, and cut the window's sides, for each shot.",
+                    detail: "Swaps the app's own top bar for a thin, plain one with just the traffic lights. The editor can change it, pick the bar's color and cut the window's sides, for each shot.",
                     isOn: $prefs.windowMinimalTitleBar
                 )
             }

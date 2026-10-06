@@ -548,7 +548,7 @@ nonisolated enum BackgroundArt {
         return ctx.makeImage()
     }
 
-    private static func cgColor(_ hex: UInt32) -> CGColor {
+    static func cgColor(_ hex: UInt32) -> CGColor {
         CGColor(
             srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
             green: CGFloat((hex >> 8) & 0xFF) / 255,

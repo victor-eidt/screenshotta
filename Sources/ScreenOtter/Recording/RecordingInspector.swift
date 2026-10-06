@@ -78,6 +78,10 @@ private struct BackgroundPanel: View {
                     detail: "Swaps the app's own top bar for a thin, plain one with just the traffic lights, so every window looks alike.",
                     isOn: doc.style(\.minimalWindowFrame)
                 )
+                InspectorBarColor(color: style.windowBarColor, sampled: doc.sampledWindowBarColor) { [weak doc] color, continuing in
+                    doc?.update(continuing: continuing) { $0.style.windowBarColor = color }
+                }
+                .disabled(!style.minimalWindowFrame)
             }
             InspectorSection("Cut") {
                 VStack(alignment: .leading, spacing: 14) {
@@ -433,5 +437,108 @@ struct InspectorSlider: View {
             Slider(value: $value, in: range, onEditingChanged: onEditing)
                 .controlSize(.small)
         }
+    }
+}
+
+/// The minimal title bar's color, in both editors: Auto (whatever is right under the bar), a window neutral,
+/// or any color from the color panel.
+struct InspectorBarColor: View {
+    /// 0xRRGGBB, or nil for Auto.
+    let color: UInt32?
+    /// What Auto picks.
+    let sampled: CGColor?
+    /// The color panel sends a stream of changes while it's used: after the first, `continuing` is true,
+    /// so they can share one undo step.
+    let onChange: (_ color: UInt32?, _ continuing: Bool) -> Void
+
+    private static let neutrals: [(hex: UInt32, name: String)] = [
+        (0xFFFFFF, "White"), (0xECECEC, "Light gray"), (0x2B2B2D, "Dark gray"), (0x141416, "Black"),
+    ]
+
+    var body: some View {
+        let custom = color.flatMap { hex in Self.neutrals.contains { $0.hex == hex } ? nil : hex }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Bar color")
+            HStack(spacing: 4) {
+                Dot(fill: AnyShapeStyle(sampled.map { Color(cgColor: $0) } ?? Color.gray), selected: color == nil, help: "Auto: the color right under the bar") {
+                    onChange(nil, false)
+                }
+                .overlay {
+                    Image(systemName: "wand.and.sparkles")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.5), radius: 1)
+                        .allowsHitTesting(false)
+                }
+                ForEach(Self.neutrals, id: \.hex) { neutral in
+                    Dot(fill: AnyShapeStyle(Color(cgColor: BackgroundArt.cgColor(neutral.hex))), selected: color == neutral.hex, help: neutral.name) {
+                        onChange(neutral.hex, false)
+                    }
+                }
+                Dot(
+                    fill: custom.map { AnyShapeStyle(Color(cgColor: BackgroundArt.cgColor($0))) }
+                        ?? AnyShapeStyle(AngularGradient(colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red], center: .center)),
+                    selected: custom != nil,
+                    help: "Any color…"
+                ) {
+                    var continuing = false
+                    let start = custom.flatMap { NSColor(cgColor: BackgroundArt.cgColor($0)) } ?? sampled.flatMap(NSColor.init(cgColor:)) ?? .white
+                    ColorPanelLink.shared.open(with: start) { picked in
+                        onChange(Self.hex(picked), continuing)
+                        continuing = true
+                    }
+                }
+            }
+        }
+    }
+
+    private static func hex(_ color: NSColor) -> UInt32 {
+        let srgb = color.usingColorSpace(.sRGB) ?? color
+        func byte(_ v: CGFloat) -> UInt32 { UInt32((min(max(v, 0), 1) * 255).rounded()) }
+        return byte(srgb.redComponent) << 16 | byte(srgb.greenComponent) << 8 | byte(srgb.blueComponent)
+    }
+
+    private struct Dot: View {
+        let fill: AnyShapeStyle
+        let selected: Bool
+        let help: String
+        let action: () -> Void
+
+        var body: some View {
+            Button(action: action) {
+                Circle()
+                    .fill(fill)
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.18)))
+                    .frame(width: 22, height: 22)
+                    .padding(3)
+                    .overlay(Circle().strokeBorder(selected ? Brand.accent : .clear, lineWidth: 2))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(help)
+        }
+    }
+}
+
+/// The system color panel, opened for one color at a time. It sends its changes here rather than to a view,
+/// since the popover it may be opened from closes as soon as the panel is clicked.
+final class ColorPanelLink: NSObject {
+    static let shared = ColorPanelLink()
+    private var onChange: ((NSColor) -> Void)?
+
+    func open(with color: NSColor, onChange: @escaping (NSColor) -> Void) {
+        let panel = NSColorPanel.shared
+        // Setting the starting color sends it back as a change: not one of the user's.
+        self.onChange = nil
+        panel.showsAlpha = false
+        panel.setTarget(self)
+        panel.setAction(#selector(colorChanged(_:)))
+        panel.color = color
+        self.onChange = onChange
+        panel.orderFront(nil)
+    }
+
+    @objc private func colorChanged(_ panel: NSColorPanel) {
+        onChange?(panel.color)
     }
 }
