@@ -55,12 +55,7 @@ struct EditorView: View {
                 }
             }
             ToolGroup {
-                ColorSwatches(selection: $doc.color)
-            }
-            ToolGroup {
-                ForEach(StrokeSize.allCases) { size in
-                    StrokeButton(size: size, selection: $doc.stroke)
-                }
+                StylePicker(doc: doc)
             }
         }
         .padding(.trailing, 14)
@@ -276,45 +271,5 @@ private struct WindowFramePanel: View {
 
     private func editing(_ began: Bool) {
         if began { doc.checkpoint() }
-    }
-}
-
-private struct ColorSwatches: View {
-    @Binding var selection: NSColor
-
-    var body: some View {
-        ForEach(Array(AnnotationPalette.colors.enumerated()), id: \.offset) { _, color in
-            let selected = selection == color
-            Button { selection = color } label: {
-                Circle()
-                    .fill(Color(nsColor: color))
-                    .overlay(Circle().strokeBorder(Color.primary.opacity(0.25), lineWidth: 0.5))
-                    .frame(width: 16, height: 16)
-                    .padding(3)
-                    .overlay(Circle().strokeBorder(selected ? Color.primary.opacity(0.85) : .clear, lineWidth: 1.5))
-                    .frame(width: 26, height: 30)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-    }
-}
-
-private struct StrokeButton: View {
-    let size: StrokeSize
-    @Binding var selection: StrokeSize
-
-    var body: some View {
-        let selected = selection == size
-        Button { selection = size } label: {
-            Capsule()
-                .fill(selected ? Brand.accent : Color.primary.opacity(0.7))
-                .frame(width: 16, height: size.points * 0.9)
-                .frame(width: 28, height: 30)
-                .background(Circle().fill(selected ? Brand.accent.opacity(0.2) : .clear).frame(width: 30, height: 30))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("Stroke width")
     }
 }

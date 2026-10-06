@@ -110,15 +110,20 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Window
 
     func windowWillClose(_ notification: Notification) {
-        // Closing means "done": edits go to the file and the clipboard.
+        // Closing means "done": edits go to the file and the clipboard, a label being typed included.
+        doc.endTextEditing()
         doc.applyCrop()
         if doc.isDirty { doc.commit() }
+        StyleColorPanel.shared.detach(from: doc)
         Self.openEditors.removeAll { $0 === self }
         AppActivation.windowClosed()
     }
 
     func windowDidResize(_ notification: Notification) { positionTrafficLights() }
-    func windowDidBecomeKey(_ notification: Notification) { positionTrafficLights() }
+    func windowDidBecomeKey(_ notification: Notification) {
+        positionTrafficLights()
+        StyleColorPanel.shared.follow(doc)
+    }
     func windowDidExitFullScreen(_ notification: Notification) { positionTrafficLights() }
 
     func positionTrafficLights() {
@@ -170,6 +175,15 @@ final class EditorWindow: TallTitleBarWindow {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         guard flags.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() else {
             return super.performKeyEquivalent(with: event)
+        }
+        // While a label is being typed, undo and copy act on its text (the Edit menu routes copy to it).
+        if let text = firstResponder as? NSTextView, text.isEditable {
+            switch (key, flags.contains(.shift)) {
+            case ("z", false): text.undoManager?.undo(); return true
+            case ("z", true): text.undoManager?.redo(); return true
+            case ("c", false): return super.performKeyEquivalent(with: event)
+            default: break
+            }
         }
         switch (key, flags.contains(.shift)) {
         case ("z", false): onUndo?()

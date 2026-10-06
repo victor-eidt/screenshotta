@@ -60,7 +60,7 @@ import Testing
             capture: CapturedImage(image: try #require(shot.compose(frame)), scale: 2, window: (shot, frame)),
             fileURL: nil
         )
-        doc.add(Annotation(kind: .arrow, start: CGPoint(x: 100, y: 200), end: CGPoint(x: 150, y: 250), color: .red, width: 10))
+        doc.add(Annotation(kind: .arrow, start: CGPoint(x: 100, y: 200), end: CGPoint(x: 150, y: 250), style: doc.style, scale: doc.scale))
 
         doc.checkpoint()
         var minimal = frame
