@@ -616,6 +616,12 @@ private struct RecordingPane: View {
                 ToggleRow(title: "Count down before recording", detail: "3, 2, 1 in the middle of what's being recorded. Esc cancels.", isOn: $prefs.recordingCountdown)
             }
 
+            RecordingAudioSection()
+
+            RecordingCameraSection()
+
+            RecordingKeystrokesSection()
+
             SettingsSection("Drafts", footer: "Every recording is a draft: edits save as you go. Reopen, rename, duplicate or trash them from the Drafts window.") {
                 SettingsRow(drafts.drafts.isEmpty ? "No drafts yet" : "\(drafts.drafts.count) draft\(drafts.drafts.count == 1 ? "" : "s")") {
                     Button("Open Drafts") { DraftsWindowController.shared.show() }
@@ -631,6 +637,12 @@ private struct RecordingPane: View {
                 FeatureRow(symbol: "plus.magnifyingglass", title: "Auto zoom", detail: "Eases in where you click and follows the pointer.")
                 RowDivider()
                 FeatureRow(symbol: "scissors", title: "Clips & speed", detail: "Trim, split, cut the sides and change the speed of each clip.")
+                RowDivider()
+                FeatureRow(symbol: "waveform", title: "Audio", detail: "Microphone and system audio on their own tracks, with volume and mute.")
+                RowDivider()
+                FeatureRow(symbol: "person.crop.square", title: "Camera bubble", detail: "A circle, a rounded square or a pebble, in any corner, out of the way while zoomed in.")
+                RowDivider()
+                FeatureRow(symbol: "keyboard", title: "Keystrokes", detail: "The shortcuts you press, on a small glass pill at the bottom of the video.")
             }
         }
         .onAppear { drafts.reload() }
@@ -761,11 +773,141 @@ private struct ShortcutRow: View {
     }
 }
 
+/// Microphone and system audio, also offered in the bar at the bottom of the screen when choosing what to record.
+private struct RecordingAudioSection: View {
+    @ObservedObject private var prefs = Preferences.shared
+    @State private var microphones: [Microphones.Device] = []
+    @State private var denied = Microphones.isDenied
+
+    var body: some View {
+        SettingsSection("Audio", footer: "Each source is saved as its own track, so its volume can be changed or muted in the editor.") {
+            ToggleRow(title: "Microphone", detail: "Records your voice with the screen.", isOn: Binding(
+                get: { prefs.recordMicrophone },
+                set: { on in
+                    prefs.recordMicrophone = on
+                    if on { Task { _ = await Microphones.requestAccess(); denied = Microphones.isDenied } }
+                }
+            ))
+            if prefs.recordMicrophone {
+                RowDivider()
+                if denied {
+                    SettingsRow("Microphone access is off", detail: "Recordings go on without it until it's allowed.") {
+                        Button("Open Settings") { Microphones.openPrivacySettings() }
+                            .buttonStyle(.soft)
+                    }
+                } else {
+                    SettingsRow("Input") {
+                        // A saved microphone that's unplugged shows as System Default, which is what records; it's kept for when it's back.
+                        Picker("", selection: Binding(
+                            get: { microphones.contains { $0.id == prefs.microphoneID } ? prefs.microphoneID ?? "" : "" },
+                            set: { prefs.microphoneID = $0.isEmpty ? nil : $0 }
+                        )) {
+                            Text("System Default").tag("")
+                            ForEach(microphones) { Text($0.name).tag($0.id) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                }
+            }
+            RowDivider()
+            ToggleRow(title: "System audio", detail: "Sound from your apps. ScreenOtter's own sounds are left out.", isOn: $prefs.recordSystemAudio)
+        }
+        .onAppear {
+            microphones = Microphones.all()
+            denied = Microphones.isDenied
+        }
+    }
+}
+
+/// The camera, also offered in the bar at the bottom of the screen when choosing what to record.
+private struct RecordingCameraSection: View {
+    @ObservedObject private var prefs = Preferences.shared
+    @State private var cameras: [Webcams.Device] = []
+    @State private var denied = Webcams.isDenied
+
+    var body: some View {
+        SettingsSection("Camera", footer: "The camera is saved on its own and shows as a bubble over the video. Shape it, move it or hide it in the editor.") {
+            ToggleRow(title: "Camera", detail: "Records you next to the screen, with a live bubble while recording.", isOn: Binding(
+                get: { prefs.recordCamera },
+                set: { on in
+                    prefs.recordCamera = on
+                    if on { Task { _ = await Webcams.requestAccess(); denied = Webcams.isDenied } }
+                }
+            ))
+            if prefs.recordCamera {
+                RowDivider()
+                if denied {
+                    SettingsRow("Camera access is off", detail: "Recordings go on without it until it's allowed.") {
+                        Button("Open Settings") { Webcams.openPrivacySettings() }
+                            .buttonStyle(.soft)
+                    }
+                } else {
+                    SettingsRow("Device") {
+                        // A saved camera that's disconnected shows as System Default, which is what records; it's kept for when it's back.
+                        Picker("", selection: Binding(
+                            get: { cameras.contains { $0.id == prefs.cameraID } ? prefs.cameraID ?? "" : "" },
+                            set: { prefs.cameraID = $0.isEmpty ? nil : $0 }
+                        )) {
+                            Text("System Default").tag("")
+                            ForEach(cameras) { Text($0.name).tag($0.id) }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                }
+            }
+        }
+        .onAppear {
+            cameras = Webcams.all()
+            denied = Webcams.isDenied
+        }
+    }
+}
+
+/// The keystroke overlay: off by default, shortcuts only unless all keys are asked for.
+private struct RecordingKeystrokesSection: View {
+    @ObservedObject private var prefs = Preferences.shared
+    @State private var granted = KeystrokePermission.isGranted
+
+    var body: some View {
+        SettingsSection(
+            "Keystrokes",
+            footer: "Only shortcuts (keys pressed with ⌘, ⌃ or ⌥) and keys like Return, Esc, Tab and the arrows are kept, unless All keys is on. Nothing is kept while a password field is active."
+        ) {
+            ToggleRow(title: "Keystrokes", detail: "Records the shortcuts you press, to show them in the video.", isOn: Binding(
+                get: { prefs.recordKeystrokes },
+                set: { on in
+                    prefs.recordKeystrokes = on
+                    if on, !KeystrokePermission.isGranted { KeystrokePermission.request() }
+                    granted = KeystrokePermission.isGranted
+                }
+            ))
+            if prefs.recordKeystrokes {
+                RowDivider()
+                if !granted {
+                    SettingsRow("Input Monitoring is off", detail: "macOS needs it to show ScreenOtter your key presses. Recordings go on without keys until it's allowed.") {
+                        Button("Open Settings") { KeystrokePermission.openSettings() }
+                            .buttonStyle(.soft)
+                    }
+                    RowDivider()
+                }
+                ToggleRow(title: "All keys", detail: "Also records what you type, not only shortcuts.", isOn: $prefs.recordAllKeys)
+            }
+        }
+        .onAppear { granted = KeystrokePermission.isGranted }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            granted = KeystrokePermission.isGranted
+        }
+    }
+}
+
 // MARK: - Permissions
 
 private struct PermissionsPane: View {
     @State private var screenRecording = Permissions.screenRecordingGranted
     @State private var accessibility = Permissions.accessibilityGranted
+    @State private var inputMonitoring = KeystrokePermission.isGranted
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -791,11 +933,23 @@ private struct PermissionsPane: View {
                     granted: accessibility,
                     action: Permissions.requestAccessibility
                 )
+                RowDivider()
+                PermissionRow(
+                    title: "Input Monitoring",
+                    detail: "Optional. Shows the shortcuts you press in recordings, when Keystrokes is on.",
+                    symbol: "keyboard",
+                    tint: .orange,
+                    granted: inputMonitoring,
+                    action: {
+                        if !KeystrokePermission.request() { KeystrokePermission.openSettings() }
+                    }
+                )
             }
         }
         .onReceive(timer) { _ in
             screenRecording = Permissions.screenRecordingGranted
             accessibility = Permissions.accessibilityGranted
+            inputMonitoring = KeystrokePermission.isGranted
         }
     }
 }

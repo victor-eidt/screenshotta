@@ -3,7 +3,7 @@ import AVFoundation
 import Combine
 
 enum RecordingInspectorTab: String, CaseIterable, Identifiable {
-    case background, cursor, zoom, clip
+    case background, cursor, zoom, clip, audio, captions, webcam, keystrokes
 
     var id: String { rawValue }
 
@@ -13,6 +13,10 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .cursor: "Cursor"
         case .zoom: "Zoom"
         case .clip: "Clip"
+        case .audio: "Audio"
+        case .captions: "Captions"
+        case .webcam: "Camera"
+        case .keystrokes: "Keystrokes"
         }
     }
 
@@ -22,21 +26,10 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .cursor: "cursorarrow"
         case .zoom: "plus.magnifyingglass"
         case .clip: "film"
-        }
-    }
-}
-
-enum ExportSize: Int, CaseIterable, Identifiable {
-    case hd = 1280, fullHD = 1920, quadHD = 2560, ultraHD = 3840
-
-    var id: Int { rawValue }
-
-    var title: String {
-        switch self {
-        case .hd: "720p"
-        case .fullHD: "1080p"
-        case .quadHD: "1440p"
-        case .ultraHD: "4K"
+        case .audio: "waveform"
+        case .captions: "captions.bubble"
+        case .webcam: "person.crop.square"
+        case .keystrokes: "keyboard"
         }
     }
 }
@@ -58,6 +51,8 @@ final class RecordingDocument: ObservableObject {
     let project: RecordingProject
     @Published private(set) var metadata: RecordingMetadata
     let cursor: CursorRecording
+    /// The keys pressed while recording, when it was made with keystrokes on.
+    let keystrokes: KeystrokeRecording?
     let wallpaper: CGImage?
     let player = AVPlayer()
 
@@ -67,10 +62,15 @@ final class RecordingDocument: ObservableObject {
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var isPlaying = false
     @Published var timelineZoom: Double = 1
-    @Published var exportSize: ExportSize = .fullHD
+    /// The template or custom settings the export sheet has selected, remembered for the next recording.
+    @Published var exportChoice = ExportChoice.saved() {
+        didSet { if exportChoice != oldValue { exportChoice.save() } }
+    }
     @Published private(set) var export: ExportState = .idle
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
+    /// Each audio track's loudness, filled in shortly after opening.
+    @Published private(set) var waveforms: [AudioSource: AudioWaveform] = [:]
 
     private(set) var timeline: ClipTimeline
     /// Kept alive on purpose: a track only weakly references its asset, and once the asset is gone
@@ -79,9 +79,18 @@ final class RecordingDocument: ObservableObject {
     private let sourceTrack: AVAssetTrack
     private let trackDuration: Double
     private let sourceSize: CGSize
+    /// The draft's audio files, loaded (the assets are kept alive for the same reason as `sourceAsset`).
+    private let sourceAudio: [SourceAudio]
+    private let audioAssets: [AVURLAsset]
+    /// The recorded audio tracks that could be loaded, in a fixed order.
+    let audioTracks: [RecordedAudioTrack]
+    /// The draft's camera file, loaded, and its asset kept alive like `sourceAsset`.
+    private let sourceWebcam: SourceWebcam?
+    private let webcamAsset: AVURLAsset?
     private let renderer: RecordingRenderer
     /// The cut last built, and the cut the player is showing (they differ while a new item is on its way, and while trimming).
-    private var composition: (segments: [ClipSegment], asset: AVMutableComposition)?
+    private var composition: (segments: [ClipSegment], edited: EditedComposition)?
+    private var mixedWaveform: (key: [Double], waveform: AudioWaveform?)?
     private var playerSegments: [ClipSegment]?
     /// The whole recording as one clip, which the player shows while a clip's edge is dragged.
     private let wholeRecording: [ClipSegment]
@@ -114,8 +123,30 @@ final class RecordingDocument: ObservableObject {
         let size = try await track.load(.naturalSize)
         let duration = try await asset.load(.duration).seconds
         let cursor = project.loadCursor()
+        let keystrokes = project.loadKeystrokes()
         var edits = project.loadEdits() ?? .initial(duration: duration, clicks: cursor.clicks, style: .lastUsed)
         let wallpaper = CGImageSourceCreateWithURL(project.wallpaperURL as CFURL, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+
+        // Audio files that are missing or unreadable are skipped: the video still opens.
+        var audio: [(track: RecordedAudioTrack, asset: AVURLAsset, source: SourceAudio)] = []
+        let recordedTracks = AudioSource.allCases.compactMap { source in metadata.audioTracks.first { $0.source == source } }
+        for recorded in recordedTracks {
+            let audioAsset = AVURLAsset(url: project.url(of: recorded))
+            guard let audioTrack = try? await audioAsset.loadTracks(withMediaType: .audio).first,
+                  let audioDuration = try? await audioAsset.load(.duration).seconds
+            else { continue }
+            audio.append((recorded, audioAsset, SourceAudio(source: recorded.source, track: audioTrack, duration: audioDuration)))
+        }
+
+        // Likewise the camera: without its file the video opens without the bubble.
+        var webcam: (asset: AVURLAsset, source: SourceWebcam)?
+        if let recorded = metadata.webcam {
+            let webcamAsset = AVURLAsset(url: project.url(of: recorded))
+            if let webcamTrack = try? await webcamAsset.loadTracks(withMediaType: .video).first,
+               let webcamDuration = try? await webcamAsset.load(.duration).seconds {
+                webcam = (webcamAsset, SourceWebcam(track: webcamTrack, duration: webcamDuration, offset: recorded.offset))
+            }
+        }
 
         // Window recordings get a minimal title bar: the first frame shows how tall the app's own top bar is,
         // and what color sits under it.
@@ -132,19 +163,23 @@ final class RecordingDocument: ObservableObject {
             }
         }
         return RecordingDocument(
-            project: project, metadata: metadata, cursor: cursor, edits: edits, asset: asset, track: track,
-            trackDuration: duration, sourceSize: size, wallpaper: wallpaper, firstFrame: firstFrame
+            project: project, metadata: metadata, cursor: cursor, keystrokes: keystrokes, edits: edits, asset: asset, track: track,
+            trackDuration: duration, sourceSize: size, wallpaper: wallpaper, firstFrame: firstFrame,
+            audio: audio, webcam: webcam
         )
     }
 
     private init(
-        project: RecordingProject, metadata: RecordingMetadata, cursor: CursorRecording, edits: RecordingEdits,
-        asset: AVURLAsset, track: AVAssetTrack, trackDuration: Double, sourceSize: CGSize, wallpaper: CGImage?, firstFrame: CGImage?
+        project: RecordingProject, metadata: RecordingMetadata, cursor: CursorRecording, keystrokes: KeystrokeRecording?, edits: RecordingEdits,
+        asset: AVURLAsset, track: AVAssetTrack, trackDuration: Double, sourceSize: CGSize, wallpaper: CGImage?, firstFrame: CGImage?,
+        audio: [(track: RecordedAudioTrack, asset: AVURLAsset, source: SourceAudio)],
+        webcam: (asset: AVURLAsset, source: SourceWebcam)?
     ) {
         self.firstFrame = firstFrame
         self.project = project
         self.metadata = metadata
         self.cursor = cursor
+        self.keystrokes = keystrokes
         self.edits = edits
         self.wallpaper = wallpaper
         sourceAsset = asset
@@ -152,6 +187,11 @@ final class RecordingDocument: ObservableObject {
         self.trackDuration = trackDuration
         self.sourceSize = sourceSize
         wholeRecording = [ClipSegment(start: 0, end: trackDuration)]
+        audioTracks = audio.map(\.track)
+        audioAssets = audio.map(\.asset)
+        sourceAudio = audio.map(\.source)
+        webcamAsset = webcam?.asset
+        sourceWebcam = webcam?.source
         timeline = ClipTimeline(edits.segments)
         renderer = RecordingRenderer(scene: RenderScene(
             style: edits.style, motion: .empty, pointSize: metadata.pointSize,
@@ -160,6 +200,7 @@ final class RecordingDocument: ObservableObject {
         player.actionAtItemEnd = .pause
         observePlayer()
         refresh()
+        loadWaveforms()
     }
 
     var duration: Double { timeline.duration }
@@ -287,8 +328,15 @@ final class RecordingDocument: ObservableObject {
             currentTime = min(timeline.outputTime(atSource: source), duration)
         }
         if let selection, !isSelectionValid(selection) { self.selection = nil }
-        // While trimming, the player keeps the whole recording and only moves to the edge (see `trim`).
-        if trimEdge == nil { refresh() }
+        var withoutAudio = new
+        withoutAudio.audio = old.audio
+        if withoutAudio == old {
+            // Only the volumes changed: the picture stays as it is.
+            player.currentItem?.audioMix = currentAudioMix()
+        } else if trimEdge == nil {
+            // While trimming, the player keeps the whole recording and only moves to the edge (see `trim`).
+            refresh()
+        }
         scheduleSave()
     }
 
@@ -332,7 +380,9 @@ final class RecordingDocument: ObservableObject {
         return RenderScene(
             style: style, motion: motion, pointSize: metadata.pointSize,
             sourceSize: sourceSize, wallpaper: wallpaper, customBackground: loadCustomBackground(style.background),
-            frame: frame
+            frame: frame, webcam: showsWebcam ? style.webcam : nil,
+            keystrokes: showsKeystrokes ? keystrokes.map { KeystrokeOverlay(events: $0.events, style: style.keystrokes) } : nil,
+            captions: showsCaptions ? edits.captions.map { CaptionOverlay(cues: $0.cues, style: style.captions) } : nil
         )
     }
 
@@ -398,9 +448,8 @@ final class RecordingDocument: ObservableObject {
         return RecordingRenderer.outputSize(canvas: canvas, longSide: Self.previewLongSide)
     }
 
-    func exportPixelSize(_ size: ExportSize) -> CGSize {
-        let canvas = RecordingRenderer.canvasSize(style: edits.style, sourceSize: contentSize)
-        return RecordingRenderer.outputSize(canvas: canvas, longSide: CGFloat(size.rawValue))
+    func exportPixelSize(_ settings: ExportSettings) -> CGSize {
+        settings.resolution.pixelSize(canvas: RecordingRenderer.canvasSize(style: edits.style, sourceSize: contentSize))
     }
 
     /// Pushes the edits to the renderer and the player. A new video composition makes the player redraw
@@ -415,19 +464,24 @@ final class RecordingDocument: ObservableObject {
 
         let segments = trimEdge != nil ? wholeRecording : isInteracting ? (playerSegments ?? edits.segments) : edits.segments
         if composition?.segments != segments {
-            guard let asset = try? RecordingComposition.make(track: sourceTrack, trackDuration: trackDuration, segments: segments) else { return }
-            composition = (segments, asset)
+            guard let edited = try? RecordingComposition.make(
+                track: sourceTrack, trackDuration: trackDuration, segments: segments, audio: sourceAudio, webcam: sourceWebcam
+            ) else { return }
+            composition = (segments, edited)
         }
         guard let composition else { return }
         let needsItem = playerSegments != composition.segments || player.currentItem == nil
         Task {
             guard let videoComposition = try? await RecordingComposition.videoComposition(
-                for: composition.asset, timeline: ClipTimeline(composition.segments), renderer: renderer, renderSize: renderSize
+                for: composition.edited.asset, composition: composition.edited, timeline: ClipTimeline(composition.segments),
+                renderer: renderer, renderSize: renderSize
             ), generation == refreshGeneration
             else { return }
             if needsItem {
-                let item = AVPlayerItem(asset: composition.asset)
+                let item = AVPlayerItem(asset: composition.edited.asset)
                 item.videoComposition = videoComposition
+                item.audioMix = currentAudioMix()
+                item.audioTimePitchAlgorithm = RecordingComposition.pitchAlgorithm
                 player.replaceCurrentItem(with: item)
                 playerSegments = composition.segments
             } else {
@@ -439,6 +493,182 @@ final class RecordingDocument: ObservableObject {
                 seek(to: currentTime)
             }
         }
+    }
+
+    // MARK: - Audio
+
+    var audioSources: [AudioSource] { audioTracks.map(\.source) }
+
+    func audioMix(for source: AudioSource) -> AudioTrackMix {
+        edits.audioMix(for: source, alongside: audioSources)
+    }
+
+    func setAudioMix(_ source: AudioSource, _ change: (inout AudioTrackMix) -> Void) {
+        var mix = audioMix(for: source)
+        change(&mix)
+        update { edits in
+            var all = edits.audio ?? [:]
+            all[source] = mix
+            edits.audio = all
+        }
+    }
+
+    private func currentAudioMix() -> AVAudioMix? {
+        guard let composition else { return nil }
+        return RecordingComposition.audioMix(composition.edited) { self.audioMix(for: $0).effectiveVolume }
+    }
+
+    /// What the timeline draws: every track at its volume, nil when nothing is audible.
+    var audibleWaveform: AudioWaveform? {
+        let volumes = audioSources.map { waveforms[$0] == nil ? -1 : audioMix(for: $0).effectiveVolume }
+        if let cached = mixedWaveform, cached.key == volumes { return cached.waveform }
+        let tracks = audioSources.compactMap { source in waveforms[source].map { ($0, audioMix(for: source).effectiveVolume) } }
+        let waveform = tracks.contains { $0.1 > 0 } ? AudioWaveform.mixed(tracks) : nil
+        mixedWaveform = (volumes, waveform)
+        return waveform
+    }
+
+    private func loadWaveforms() {
+        for track in audioTracks {
+            let url = project.url(of: track)
+            Task {
+                if let waveform = await AudioWaveform.load(url) { waveforms[track.source] = waveform }
+            }
+        }
+    }
+
+    // MARK: - Webcam
+
+    /// The recording has a camera file that could be loaded.
+    var hasWebcam: Bool { sourceWebcam != nil }
+
+    /// The bubble is drawn: there's a camera, and it isn't turned off for this video.
+    var showsWebcam: Bool { hasWebcam && edits.webcamHidden != true }
+
+    var webcamDeviceName: String? { metadata.webcam?.deviceName }
+
+    func setWebcamVisible(_ visible: Bool) {
+        update { $0.webcamHidden = visible ? nil : true }
+    }
+
+    /// The bubble's frame in the preview, in top-left-origin units of `size` (the player's on-screen size),
+    /// at rest and at the current moment (smaller while zoomed in). Nil while it isn't drawn, including while
+    /// it's faded out for a zoom, so there's nothing invisible to hover or drag.
+    func webcamFrame(in size: CGSize) -> (rest: CGRect, now: CGRect)? {
+        guard showsWebcam, size.width > 0 else { return nil }
+        let canvas = previewSize
+        let k = size.width / canvas.width
+        let style = edits.style.webcam
+        let zoom = motion.camera(at: timeline.sourceTime(atOutput: currentTime)).scale
+        let now = WebcamLayout.presentation(style, canvas: canvas, zoomScale: zoom)
+        guard WebcamLayout.isGrabbable(opacity: now.opacity) else { return nil }
+        let rest = WebcamLayout.frame(style, canvas: canvas)
+        func scaled(_ r: CGRect) -> CGRect { CGRect(x: r.minX * k, y: r.minY * k, width: r.width * k, height: r.height * k) }
+        return (scaled(rest), scaled(now.frame))
+    }
+
+    /// Moves the bubble so its resting top-left corner is at `origin` (preview units of `size`).
+    /// `snap` pulls it into a corner when it's dropped close to one.
+    func moveWebcam(origin: CGPoint, in size: CGSize, snap: Bool) {
+        guard size.width > 0 else { return }
+        let canvas = previewSize
+        let k = canvas.width / size.width
+        var position = WebcamLayout.position(origin: CGPoint(x: origin.x * k, y: origin.y * k), style: edits.style.webcam, canvas: canvas)
+        if snap { position = WebcamLayout.snapped(position) }
+        update { $0.style.webcam.x = position.x; $0.style.webcam.y = position.y }
+    }
+
+    // MARK: - Keystrokes
+
+    /// The recording was made with keystrokes on (it may still have none, if no shortcut was pressed).
+    var hasKeystrokes: Bool { keystrokes != nil }
+
+    /// The pill is drawn: there are keys, and it isn't turned off for this video.
+    var showsKeystrokes: Bool { !(keystrokes?.events.isEmpty ?? true) && edits.keystrokesHidden != true }
+
+    func setKeystrokesVisible(_ visible: Bool) {
+        update { $0.keystrokesHidden = visible ? nil : true }
+    }
+
+    // MARK: - Captions
+
+    enum TranscriptionState: Equatable {
+        case idle
+        case running(CaptionTranscriber.Phase)
+        case failed(String)
+    }
+
+    @Published private(set) var transcription: TranscriptionState = .idle
+    private var transcriptionTask: Task<Void, Never>?
+
+    /// The microphone's file, when the recording has one: captions are heard from it.
+    var microphoneURL: URL? {
+        audioTracks.first { $0.source == .microphone }.map { project.folder.appendingPathComponent($0.file) }
+    }
+
+    /// Captions are drawn: there are some, and they aren't turned off for this video.
+    var showsCaptions: Bool { !(edits.captions?.cues.isEmpty ?? true) && edits.captionsHidden != true }
+
+    func setCaptionsVisible(_ visible: Bool) {
+        update { $0.captionsHidden = visible ? nil : true }
+    }
+
+    /// Transcribes the microphone into captions (replacing any there were), as one undo step.
+    func transcribe(_ language: CaptionLanguage) {
+        guard let url = microphoneURL, transcriptionTask == nil else { return }
+        transcription = .running(.transcribing(nil))
+        transcriptionTask = Task { [weak self] in
+            do {
+                let words = try await CaptionTranscriber.transcribe(url, language: language) { phase in
+                    Task { @MainActor in
+                        guard let self, case .running = self.transcription else { return }
+                        self.transcription = .running(phase)
+                    }
+                }
+                try Task.checkCancellation()
+                guard let self else { return }
+                let cues = CaptionPhrasing.cues(words)
+                self.update { edits in
+                    edits.captions = CaptionTrack(language: language.id, cues: cues)
+                    edits.captionsHidden = nil
+                }
+                self.transcription = .idle
+            } catch {
+                self?.transcription = Task.isCancelled ? .idle : .failed(error.localizedDescription)
+            }
+            self?.transcriptionTask = nil
+        }
+    }
+
+    func cancelTranscription() {
+        transcriptionTask?.cancel()
+        transcription = .idle
+    }
+
+    /// Rewrites one caption; emptied, it's removed.
+    func setCaptionText(_ id: UUID, _ text: String) {
+        update { edits in
+            guard var track = edits.captions, let index = track.cues.firstIndex(where: { $0.id == id }) else { return }
+            if let cue = track.cues[index].withText(text) {
+                track.cues[index] = cue
+            } else {
+                track.cues.remove(at: index)
+            }
+            edits.captions = track
+        }
+    }
+
+    /// Where a caption first shows in the edited video, or nil when it was cut out.
+    func outputStart(of cue: CaptionCue) -> Double? {
+        CaptionTimeline.pieces([cue], timeline: timeline).first?.start
+    }
+
+    /// Writes the captions as .srt, timed to the edited video, where exports go. Returns the file.
+    func saveSubtitles() throws -> URL {
+        guard let cues = edits.captions?.cues, !cues.isEmpty else { throw CocoaError(.fileWriteUnknown) }
+        let url = Self.exportURL(named: metadata.title, suffix: nil, fileExtension: "srt")
+        try CaptionSRT.text(CaptionTimeline.pieces(cues, timeline: timeline)).write(to: url, atomically: true, encoding: .utf8)
+        return url
     }
 
     // MARK: - Clips
@@ -591,24 +821,75 @@ final class RecordingDocument: ObservableObject {
 
     // MARK: - Export
 
+    var exportSettings: ExportSettings { exportChoice.settings }
+
+    /// Selects a template (nil for Custom), and sets the canvas to its aspect ratio as one undo step,
+    /// so the preview shows what the export will be.
+    func selectExport(template: ExportTemplate?, variant: String? = nil) {
+        var choice = exportChoice
+        choice.templateID = template?.id
+        if let template, let variant { choice.variants[template.id] = variant }
+        exportChoice = choice
+        if let aspect = choice.variant?.aspect { setAspect(aspect) }
+    }
+
+    func setAspect(_ aspect: RecordingAspect) {
+        guard aspect != edits.style.aspect else { return }
+        update { $0.style.aspect = aspect }
+    }
+
+    /// The template's canvas, when the editor's has been changed away from it since it was picked.
+    var exportAspectMismatch: RecordingAspect? {
+        guard let aspect = exportChoice.variant?.aspect, aspect != edits.style.aspect else { return nil }
+        return aspect
+    }
+
+    /// A rough size for a GIF export, nil for video.
+    var gifSizeEstimate: Int? {
+        let settings = exportSettings
+        guard settings.format == .gif else { return nil }
+        let size = exportPixelSize(settings)
+        var webcamShare = 0.0
+        if showsWebcam {
+            let bubble = WebcamLayout.frame(edits.style.webcam, canvas: size)
+            webcamShare = Double(bubble.width * bubble.height / (size.width * size.height))
+        }
+        return GIFEstimate.bytes(
+            size: size, duration: duration, fps: settings.fps,
+            zoom: GIFEstimate.zoomTime(zooms: edits.zooms, segments: edits.segments), webcamShare: webcamShare
+        )
+    }
+
     func startExport() {
         guard !isInteracting, let composition, !isExporting else { return }
         player.pause()
-        let size = exportPixelSize(exportSize)
-        let url = Self.exportURL(named: metadata.title)
+        let settings = exportSettings
+        let size = exportPixelSize(settings)
+        let url = Self.exportURL(named: metadata.title, suffix: exportChoice.fileSuffix, fileExtension: settings.format.fileExtension)
         // A frozen copy of the edits: changing things while exporting doesn't affect the file.
         let exportRenderer = RecordingRenderer(scene: renderer.currentScene)
+        let volumes = Dictionary(uniqueKeysWithValues: audioSources.map { ($0, audioMix(for: $0).effectiveVolume) })
+        let volume: (AudioSource) -> Double = { volumes[$0] ?? 0 }
+        let asset = RecordingComposition.exportAsset(composition.edited, volume: volume)
+        let audioMix = RecordingComposition.audioMix(composition.edited, volume: volume)
         export = .exporting(0)
         Task {
             do {
                 let videoComposition = try await RecordingComposition.videoComposition(
-                    for: composition.asset, timeline: ClipTimeline(composition.segments), renderer: exportRenderer, renderSize: size
+                    for: asset, composition: composition.edited, timeline: ClipTimeline(composition.segments),
+                    renderer: exportRenderer, renderSize: size, frameRate: settings.fps
                 )
-                try await RecordingComposition.export(composition.asset, videoComposition: videoComposition, to: url) { progress in
+                let progress: @Sendable (Double) -> Void = { progress in
                     Task { @MainActor in
                         guard case .exporting = self.export else { return }
                         self.export = .exporting(progress)
                     }
+                }
+                switch settings.format {
+                case .mp4:
+                    try await RecordingComposition.export(asset, videoComposition: videoComposition, audioMix: audioMix, to: url, progress: progress)
+                case .gif:
+                    try await GIFExport.export(asset, videoComposition: videoComposition, to: url, progress: progress)
                 }
                 export = .done(url)
                 if Preferences.shared.copyToClipboard { copyFile(url) }
@@ -633,13 +914,15 @@ final class RecordingDocument: ObservableObject {
         pasteboard.writeObjects([url as NSURL])
     }
 
-    private static func exportURL(named name: String) -> URL {
+    /// "Title – Product Hunt.gif" for a template, "Title.mp4" for custom settings, never over an existing file.
+    private static func exportURL(named title: String, suffix: String?, fileExtension: String) -> URL {
         let folder = Preferences.shared.saveFolder
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        var url = folder.appendingPathComponent(name).appendingPathExtension("mp4")
+        let name = suffix.map { "\(title) – \($0)" } ?? title
+        var url = folder.appendingPathComponent(name).appendingPathExtension(fileExtension)
         var counter = 2
         while FileManager.default.fileExists(atPath: url.path) {
-            url = folder.appendingPathComponent("\(name) (\(counter))").appendingPathExtension("mp4")
+            url = folder.appendingPathComponent("\(name) (\(counter))").appendingPathExtension(fileExtension)
             counter += 1
         }
         return url

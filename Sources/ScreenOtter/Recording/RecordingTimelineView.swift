@@ -135,6 +135,7 @@ private struct ClipBlock: View {
     @GestureState private var isTrimming = false
 
     private var isSelected: Bool { doc.selection == .segment(segment.id) }
+    private var waveform: AudioWaveform? { doc.audibleWaveform }
 
     private func finishTrim() {
         guard trimOrigin != nil else { return }
@@ -146,6 +147,15 @@ private struct ClipBlock: View {
         GeometryReader { geo in
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(RecordingTheme.clip)
+                .overlay(alignment: .bottom) {
+                    if let waveform {
+                        ClipWaveform(levels: waveform.levels(from: segment.start, to: segment.end, count: ClipWaveform.barCount(width: geo.size.width - 20)))
+                            .frame(height: ClipWaveform.height)
+                            .padding(.horizontal, 10)
+                            .padding(.bottom, 5)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(isSelected ? Color.white : Color.black.opacity(0.25), lineWidth: isSelected ? 2 : 1)
@@ -166,6 +176,8 @@ private struct ClipBlock: View {
                             .monospacedDigit()
                         }
                         .foregroundStyle(.white)
+                        // Makes room for the waveform underneath.
+                        .offset(y: waveform == nil ? 0 : -6)
                         .allowsHitTesting(false)
                     }
                 }
@@ -209,6 +221,31 @@ private struct ClipBlock: View {
                     .onEnded { _ in finishTrim() }
             )
             .help(leading ? "Drag to trim the start" : "Drag to trim the end")
+    }
+}
+
+/// The clip's sound, a faint strip of rounded bars along its bottom edge, under the label.
+private struct ClipWaveform: View {
+    let levels: [Float]
+
+    static let height: CGFloat = 13
+    static let pitch: CGFloat = 3
+    static let barWidth: CGFloat = 2
+
+    static func barCount(width: CGFloat) -> Int {
+        max(0, Int((width + pitch - barWidth) / pitch))
+    }
+
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            for (index, level) in levels.enumerated() {
+                let height = max(Self.barWidth, CGFloat(level) * size.height)
+                let rect = CGRect(x: CGFloat(index) * Self.pitch, y: size.height - height, width: Self.barWidth, height: height)
+                path.addRoundedRect(in: rect, cornerSize: CGSize(width: 1, height: 1))
+            }
+            context.fill(path, with: .color(.white.opacity(0.32)))
+        }
     }
 }
 

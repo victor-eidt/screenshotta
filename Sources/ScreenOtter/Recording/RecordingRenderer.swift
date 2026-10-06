@@ -12,6 +12,12 @@ nonisolated struct RenderScene: @unchecked Sendable {
     var wallpaper: CGImage?
     var customBackground: CGImage?
     var frame: RecordingFrame?
+    /// The webcam bubble's look, or nil when there's no bubble to draw.
+    var webcam: WebcamStyle?
+    /// The keystroke pill, or nil when there are no keys to show.
+    var keystrokes: KeystrokeOverlay?
+    /// The captions, or nil when there are none to show.
+    var captions: CaptionOverlay?
 
     /// The recording as framed: cut at the sides, and with its title bar replaced.
     var contentSize: CGSize { frame?.size(of: sourceSize) ?? sourceSize }
@@ -52,7 +58,8 @@ nonisolated struct RecordingFrame: @unchecked Sendable {
     }
 }
 
-/// Draws one output frame: background, shadow, the rounded recording, pointer, clicks, then the camera on top.
+/// Draws one output frame: background, shadow, the rounded recording, pointer, clicks, then the camera on top,
+/// and the webcam bubble over everything (it doesn't zoom with the picture).
 /// Called by AVFoundation on its own threads, for playback and for export alike.
 nonisolated final class RecordingRenderer: @unchecked Sendable {
     static let context = CIContext(options: [.cacheIntermediates: false])
@@ -60,6 +67,10 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
     private let lock = NSLock()
     private var scene: RenderScene
     private var backdrop: (key: String, image: CIImage)?
+    /// The keystroke pills for the cut last drawn.
+    private var keystrokeGroups: (segments: [ClipSegment], events: [KeystrokeEvent], groups: [KeystrokeGroup])?
+    /// The captions laid out on the cut last drawn.
+    private var captionPieces: (segments: [ClipSegment], cues: [CaptionCue], pieces: [CaptionPiece])?
 
     init(scene: RenderScene) {
         self.scene = scene
@@ -106,7 +117,7 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
 
     /// `timeline` is the cut of the video being drawn, which may lag behind the latest edits for a moment:
     /// the pointer and camera must follow the frames actually on screen.
-    func render(source: CIImage, outputTime: Double, timeline: ClipTimeline, renderSize: CGSize) -> CIImage {
+    func render(source: CIImage, webcam: CIImage? = nil, outputTime: Double, timeline: ClipTimeline, renderSize: CGSize) -> CIImage {
         let scene = currentScene
         let style = scene.style
         let t = timeline.sourceTime(atOutput: outputTime)
@@ -135,7 +146,50 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
         }
         // The camera works in the framed recording already.
         let focus = CGPoint(x: rect.minX + camera.x * rect.width, y: rect.maxY - camera.y * rect.height)
-        return applyCamera(camera, focus: focus, to: image, size: renderSize)
+        image = applyCamera(camera, focus: focus, to: image, size: renderSize)
+        if let webcam, let style = scene.webcam,
+           let bubble = WebcamArt.bubble(camera: webcam, style: style, canvas: renderSize, zoomScale: camera.scale) {
+            image = bubble.composited(over: image).cropped(to: CGRect(origin: .zero, size: renderSize))
+        }
+        let content = CGRect(x: rect.minX, y: renderSize.height - rect.maxY, width: rect.width, height: rect.height)
+        var captionHeight: CGFloat = 0
+        if let overlay = scene.captions,
+           let shown = CaptionPresentation.at(outputTime, source: t, pieces: captionPieces(overlay, timeline: timeline)),
+           let caption = CaptionArt.overlay(shown, style: overlay.style, backdrop: image, canvas: renderSize, content: content) {
+            image = caption.image.composited(over: image).cropped(to: CGRect(origin: .zero, size: renderSize))
+            captionHeight = caption.frame.height * CGFloat(shown.opacity)
+        }
+        if let overlay = scene.keystrokes,
+           let pill = KeystrokeArt.overlay(
+               groups: keystrokeGroups(overlay, timeline: timeline), style: overlay.style, at: outputTime,
+               backdrop: image, canvas: renderSize, content: content,
+               // On the same edge as a caption, the pill steps back to sit beside it rather than over it.
+               lift: overlay.style.position == scene.captions?.style.position && captionHeight > 0
+                   ? captionHeight + KeystrokeLayout.height(overlay.style, canvas: renderSize) * 0.3 : 0
+           ) {
+            image = pill.composited(over: image).cropped(to: CGRect(origin: .zero, size: renderSize))
+        }
+        return image
+    }
+
+    /// The captions follow the cut being drawn, so they're laid out again only when it or they change.
+    private func captionPieces(_ overlay: CaptionOverlay, timeline: ClipTimeline) -> [CaptionPiece] {
+        if let cached = lock.withLock({ captionPieces }), cached.segments == timeline.segments, cached.cues == overlay.cues {
+            return cached.pieces
+        }
+        let pieces = CaptionTimeline.pieces(overlay.cues, timeline: timeline)
+        lock.withLock { captionPieces = (timeline.segments, overlay.cues, pieces) }
+        return pieces
+    }
+
+    /// The pills follow the cut being drawn, so they're regrouped only when it changes.
+    private func keystrokeGroups(_ overlay: KeystrokeOverlay, timeline: ClipTimeline) -> [KeystrokeGroup] {
+        if let cached = lock.withLock({ keystrokeGroups }), cached.segments == timeline.segments, cached.events == overlay.events {
+            return cached.groups
+        }
+        let groups = KeystrokeTimeline.groups(overlay.events, timeline: timeline)
+        lock.withLock { keystrokeGroups = (timeline.segments, overlay.events, groups) }
+        return groups
     }
 
     /// The video frame cut at its edges and with its title bar replaced, when framed; origin at zero either way.

@@ -64,6 +64,13 @@ final class Preferences: ObservableObject {
         static let textShortcut = "textShortcut"
         static let recordingCountdown = "recordingCountdown"
         static let shakeToOpenShelf = "shakeToOpenShelf"
+        static let recordMicrophone = "recordMicrophone"
+        static let microphoneID = "microphoneID"
+        static let recordSystemAudio = "recordSystemAudio"
+        static let recordCamera = "recordCamera"
+        static let cameraID = "cameraID"
+        static let recordKeystrokes = "recordKeystrokes"
+        static let recordAllKeys = "recordAllKeys"
     }
 
     static let defaultFolder = FileManager.default
@@ -93,6 +100,17 @@ final class Preferences: ObservableObject {
     }
     @Published var bringWindowToFront: Bool { didSet { defaults.set(bringWindowToFront, forKey: Key.bringWindowToFront) } }
     @Published var recordingCountdown: Bool { didSet { defaults.set(recordingCountdown, forKey: Key.recordingCountdown) } }
+    @Published var recordMicrophone: Bool { didSet { defaults.set(recordMicrophone, forKey: Key.recordMicrophone) } }
+    /// The microphone's unique ID; nil follows the system's input device.
+    @Published var microphoneID: String? { didSet { defaults.set(microphoneID, forKey: Key.microphoneID) } }
+    @Published var recordSystemAudio: Bool { didSet { defaults.set(recordSystemAudio, forKey: Key.recordSystemAudio) } }
+    @Published var recordCamera: Bool { didSet { defaults.set(recordCamera, forKey: Key.recordCamera) } }
+    /// The camera's unique ID; nil follows the system's default camera.
+    @Published var cameraID: String? { didSet { defaults.set(cameraID, forKey: Key.cameraID) } }
+    /// Keeps the keys pressed while recording, for the keystroke overlay.
+    @Published var recordKeystrokes: Bool { didSet { defaults.set(recordKeystrokes, forKey: Key.recordKeystrokes) } }
+    /// Keeps typing too, not only shortcuts and special keys.
+    @Published var recordAllKeys: Bool { didSet { defaults.set(recordAllKeys, forKey: Key.recordAllKeys) } }
 
     @Published var shakeToOpenShelf: Bool {
         didSet {
@@ -167,6 +185,15 @@ final class Preferences: ObservableObject {
         bringWindowToFront = defaults.bool(forKey: Key.bringWindowToFront)
         shakeToOpenShelf = defaults.bool(forKey: Key.shakeToOpenShelf)
         recordingCountdown = defaults.bool(forKey: Key.recordingCountdown)
+        // Off until asked for: no permission prompt and no sound in a recording nobody expected.
+        recordMicrophone = defaults.bool(forKey: Key.recordMicrophone)
+        recordSystemAudio = defaults.bool(forKey: Key.recordSystemAudio)
+        recordCamera = defaults.bool(forKey: Key.recordCamera)
+        // Keys are private: off until asked for, and shortcuts only unless all keys are asked for too.
+        recordKeystrokes = defaults.bool(forKey: Key.recordKeystrokes)
+        recordAllKeys = defaults.bool(forKey: Key.recordAllKeys)
+        _cameraID = Published(initialValue: defaults.string(forKey: Key.cameraID))
+        _microphoneID = Published(initialValue: defaults.string(forKey: Key.microphoneID))
         // Optionals are already initialized to nil, so a plain assignment here would run didSet.
         _areaShortcut = Published(initialValue: Self.loadShortcut(Key.areaShortcut, from: defaults, default: .defaultArea))
         _windowShortcut = Published(initialValue: Self.loadShortcut(Key.windowShortcut, from: defaults, default: .defaultWindow))

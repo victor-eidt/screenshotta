@@ -30,6 +30,7 @@ struct RecordingEditorView: View {
                 VStack(spacing: 0) {
                     PreviewToolbar(doc: doc)
                     PlayerSurface(player: doc.player)
+                        .overlay { WebcamDragHandle(doc: doc) }
                         .aspectRatio(doc.previewSize, contentMode: .fit)
                         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .shadow(color: .black.opacity(0.4), radius: 18, y: 6)
@@ -109,71 +110,6 @@ private struct RecordingTopBar: View {
     }
 }
 
-private struct ExportPopover: View {
-    @ObservedObject var doc: RecordingDocument
-    let actions: RecordingEditorActions
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            switch doc.export {
-            case .idle, .failed:
-                Text("Export Video").font(.headline)
-                Picker("Resolution", selection: $doc.exportSize) {
-                    ForEach(ExportSize.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                let size = doc.exportPixelSize(doc.exportSize)
-                Text(verbatim: "MP4 · \(Int(size.width)) × \(Int(size.height)) · 60 fps · \(RecordingFormat.duration(doc.duration))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                if case let .failed(message) = doc.export {
-                    Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                }
-                Button {
-                    doc.startExport()
-                } label: {
-                    Text("Export to \(Preferences.shared.saveFolder.lastPathComponent)")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .keyboardShortcut(.defaultAction)
-
-            case let .exporting(progress):
-                Text("Exporting…").font(.headline)
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-
-            case let .done(url):
-                Label("Exported", systemImage: "checkmark.circle.fill")
-                    .font(.headline)
-                    .foregroundStyle(.green)
-                Text(url.lastPathComponent)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                HStack {
-                    Button("Show in Finder") { actions.showInFinder(url) }
-                    Button("Copy") { doc.copyFile(url) }
-                    Button("Add to Shelf") { actions.addToShelf(url) }
-                }
-                Button("Export Again…") { doc.resetExport() }
-                    .buttonStyle(.link)
-            }
-        }
-        .padding(18)
-        .frame(width: 340)
-    }
-}
-
 // MARK: - Preview
 
 private struct PreviewToolbar: View {
@@ -198,7 +134,7 @@ private struct PreviewToolbar: View {
 
             Spacer()
 
-            let size = doc.exportPixelSize(doc.exportSize)
+            let size = doc.exportPixelSize(doc.exportSettings)
             Text(verbatim: "\(Int(size.width)) × \(Int(size.height))")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
@@ -243,6 +179,65 @@ final class PlayerLayerView: NSView {
         CATransaction.setDisableActions(true)
         playerLayer.frame = bounds
         CATransaction.commit()
+    }
+}
+
+/// Lets the webcam bubble be dragged around the preview. Invisible until hovered; dropped near a corner,
+/// the bubble settles into it. Absent while the bubble is faded out for a zoom.
+private struct WebcamDragHandle: View {
+    @ObservedObject var doc: RecordingDocument
+    @State private var dragStart: CGPoint?
+    @State private var hovering = false
+
+    var body: some View {
+        GeometryReader { geometry in
+            if let frames = doc.webcamFrame(in: geometry.size) {
+                let shape = doc.edits.style.webcam.shape
+                WebcamShapeOutline(shape: shape)
+                    .stroke(Color.white.opacity(hovering || dragStart != nil ? 0.9 : 0), lineWidth: 1.5)
+                    .shadow(color: .black.opacity(0.3), radius: 2)
+                    .contentShape(WebcamShapeOutline(shape: shape))
+                    .frame(width: frames.now.width, height: frames.now.height)
+                    .position(x: frames.now.midX, y: frames.now.midY)
+                    .onHover { inside in
+                        hovering = inside
+                        if inside { NSCursor.openHand.set() } else { NSCursor.arrow.set() }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 2)
+                            .onChanged { value in
+                                if dragStart == nil {
+                                    dragStart = frames.rest.origin
+                                    doc.beginInteraction()
+                                    NSCursor.closedHand.set()
+                                }
+                                guard let start = dragStart else { return }
+                                let origin = CGPoint(x: start.x + value.translation.width, y: start.y + value.translation.height)
+                                doc.moveWebcam(origin: origin, in: geometry.size, snap: false)
+                            }
+                            .onEnded { value in
+                                if let start = dragStart {
+                                    let origin = CGPoint(x: start.x + value.translation.width, y: start.y + value.translation.height)
+                                    doc.moveWebcam(origin: origin, in: geometry.size, snap: true)
+                                }
+                                dragStart = nil
+                                doc.endInteraction()
+                                if hovering { NSCursor.openHand.set() }
+                            }
+                    )
+                    .help("Drag to move the camera")
+                    .animation(.easeOut(duration: 0.15), value: hovering)
+                    // Gone when the bubble fades out for a zoom: leave no hand cursor or open drag behind.
+                    .onDisappear {
+                        if hovering { NSCursor.arrow.set() }
+                        hovering = false
+                        if dragStart != nil {
+                            dragStart = nil
+                            doc.endInteraction()
+                        }
+                    }
+            }
+        }
     }
 }
 

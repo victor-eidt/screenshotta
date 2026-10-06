@@ -14,11 +14,13 @@ nonisolated enum RecordingError: LocalizedError {
 
 /// Streams the screen with ScreenCaptureKit into a HEVC movie. The pointer is left out:
 /// the editor draws its own, so it can be smoothed, resized and followed by the camera.
+/// System audio and the microphone go to files of their own, on the video's clock.
 nonisolated final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     struct Result {
         /// Host time of the first frame, in seconds. Pointer samples are measured from it.
         var startHostTime: Double
         var duration: Double
+        var audio: [RecordedAudioTrack]
     }
 
     /// Called on a background queue when the stream stops by itself (the window closed, permission revoked).
@@ -31,8 +33,15 @@ nonisolated final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelega
     private var firstTime: CMTime?
     private var startHostTime: Double?
     private var lastTime = CMTime.zero
+    private var audioWriters: [AudioSource: AudioTrackWriter] = [:]
+    /// macOS 14 records the microphone outside ScreenCaptureKit.
+    private var microphoneCapture: MicrophoneCapture?
 
-    init(filter: SCContentFilter, configuration: SCStreamConfiguration, outputURL: URL, alpha: Bool) throws {
+    /// `audioURL` gives the file each audio source is written to.
+    init(
+        filter: SCContentFilter, configuration: SCStreamConfiguration, outputURL: URL, alpha: Bool,
+        audio: AudioCaptureOptions, audioURL: (AudioSource) -> URL
+    ) throws {
         writer = try AVAssetWriter(outputURL: outputURL, fileType: .mov)
         let pixels = configuration.width * configuration.height
         var compression: [String: Any] = [
@@ -52,8 +61,42 @@ nonisolated final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelega
         input.expectsMediaDataInRealTime = true
         writer.add(input)
         super.init()
+        if audio.systemAudio {
+            configuration.capturesAudio = true
+            configuration.excludesCurrentProcessAudio = true
+            configuration.sampleRate = 48_000
+            configuration.channelCount = 2
+            audioWriters[.system] = AudioTrackWriter(source: .system, url: audioURL(.system))
+        }
+        var microphoneThroughStream = false
+        if let microphone = audio.microphone {
+            let writer = AudioTrackWriter(source: .microphone, url: audioURL(.microphone), deviceName: microphone.name)
+            if #available(macOS 15, *) {
+                configuration.captureMicrophone = true
+                configuration.microphoneCaptureDeviceID = microphone.deviceID
+                microphoneThroughStream = true
+                audioWriters[.microphone] = writer
+            } else {
+                // The recording goes on without the microphone if it can't be opened.
+                do {
+                    microphoneCapture = try MicrophoneCapture(deviceID: microphone.deviceID, queue: queue) { [weak self] buffer, hostTime in
+                        self?.appendAudio(buffer, source: .microphone, hostTime: hostTime)
+                    }
+                    audioWriters[.microphone] = writer
+                } catch {
+                    NSLog("ScreenOtter: could not start the microphone: \(error)")
+                }
+            }
+        }
+
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
+        if audio.systemAudio {
+            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: queue)
+        }
+        if #available(macOS 15, *), microphoneThroughStream {
+            try stream.addStreamOutput(self, type: .microphone, sampleHandlerQueue: queue)
+        }
         self.stream = stream
     }
 
@@ -72,14 +115,27 @@ nonisolated final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelega
     }
 
     func start() async throws {
-        try await stream?.startCapture()
+        if let microphoneCapture {
+            await Task.detached { microphoneCapture.start() }.value
+        }
+        do {
+            try await stream?.startCapture()
+        } catch {
+            microphoneCapture?.stop()
+            throw error
+        }
     }
 
     func stop() async throws -> Result {
         try? await stream?.stopCapture()
+        // Read before the microphone stops: that can take a moment on macOS 14, and the video would hold its last frame for it.
         let end = CMClockGetTime(CMClockGetHostTimeClock())
+        if let microphoneCapture {
+            await Task.detached { microphoneCapture.stop() }.value
+        }
         return try await withCheckedThrowingContinuation { continuation in
             queue.async { [self] in
+                let audio = AudioSource.allCases.compactMap { audioWriters[$0]?.finish() }
                 guard let firstTime, let startHostTime else {
                     writer.cancelWriting()
                     continuation.resume(throwing: RecordingError.noFrames)
@@ -92,7 +148,7 @@ nonisolated final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelega
                 writer.endSession(atSourceTime: endTime)
                 writer.finishWriting { [self] in
                     if writer.status == .completed {
-                        continuation.resume(returning: Result(startHostTime: startHostTime, duration: (endTime - firstTime).seconds))
+                        continuation.resume(returning: Result(startHostTime: startHostTime, duration: (endTime - firstTime).seconds, audio: audio))
                     } else {
                         continuation.resume(throwing: writer.error ?? RecordingError.noFrames)
                     }
@@ -104,6 +160,14 @@ nonisolated final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelega
     // MARK: - SCStreamOutput
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        if type == .audio {
+            appendAudio(sampleBuffer, source: .system, hostTime: sampleBuffer.presentationTimeStamp.seconds)
+            return
+        }
+        if #available(macOS 15, *), type == .microphone {
+            appendAudio(sampleBuffer, source: .microphone, hostTime: sampleBuffer.presentationTimeStamp.seconds)
+            return
+        }
         guard type == .screen, sampleBuffer.isValid,
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let rawStatus = attachments.first?[.status] as? Int,
@@ -123,6 +187,15 @@ nonisolated final class ScreenRecorder: NSObject, SCStreamOutput, SCStreamDelega
             input.append(sampleBuffer)
             lastTime = time
         }
+    }
+
+    /// Sound before the first video frame is dropped: the files start where the video does.
+    private func appendAudio(_ sampleBuffer: CMSampleBuffer, source: AudioSource, hostTime: Double) {
+        guard let startHostTime, let writer = audioWriters[source] else { return }
+        // Buffer times are host times; if they ever aren't, fall back to when the buffer arrived.
+        let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+        let start = abs(hostTime - now) < 2 ? hostTime : now - sampleBuffer.duration.seconds
+        writer.append(sampleBuffer, at: start - startHostTime)
     }
 
     // MARK: - SCStreamDelegate

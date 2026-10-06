@@ -46,6 +46,14 @@
             </array>
         </dict>
     </array>
+    <key>NSCameraUsageDescription</key>
+    <string>ScreenOtter records your camera with screen recordings when you turn it on, for the bubble in the video.</string>
+    <key>NSCameraUseContinuityCameraDeviceType</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>ScreenOtter records your microphone with screen recordings when you turn it on.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>ScreenOtter turns what you say into the microphone into captions for your recordings.</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>ScreenOtter needs Screen Recording access to take screenshots and record your screen.</string>
 </dict>

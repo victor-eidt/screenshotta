@@ -8,9 +8,9 @@ import Testing
     /// every 1/60 s, or the pointer (drawn on top) only moves when something else on screen does.
     @Test func drawsSixtyFramesASecondOverAStillRecording() async throws {
         try await withStillRecording { composition, videoComposition in
-            let reader = try AVAssetReader(asset: composition)
+            let reader = try AVAssetReader(asset: composition.asset)
             let output = AVAssetReaderVideoCompositionOutput(
-                videoTracks: try await composition.loadTracks(withMediaType: .video),
+                videoTracks: try await composition.asset.loadTracks(withMediaType: .video),
                 videoSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
             )
             output.videoComposition = videoComposition
@@ -24,7 +24,7 @@ import Testing
         try await withStillRecording { composition, videoComposition in
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("export-\(UUID().uuidString).mp4")
             defer { try? FileManager.default.removeItem(at: url) }
-            try await RecordingComposition.export(composition, videoComposition: videoComposition, to: url) { _ in }
+            try await RecordingComposition.export(composition.asset, videoComposition: videoComposition, audioMix: nil, to: url) { _ in }
 
             let exported = AVURLAsset(url: url)
             let tracks = try await exported.loadTracks(withMediaType: .video)
@@ -46,7 +46,7 @@ import Testing
     }
 
     /// A 1.5 s recording with three frames, cut and drawn the way the editor does it.
-    private func withStillRecording(_ body: (AVMutableComposition, AVVideoComposition) async throws -> Void) async throws {
+    private func withStillRecording(_ body: (EditedComposition, AVVideoComposition) async throws -> Void) async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("still-\(UUID().uuidString).mov")
         defer { try? FileManager.default.removeItem(at: url) }
         try await TestVideo.write(to: url, frameTimes: [0, 0.5, 1.0], duration: 1.5)
@@ -61,7 +61,7 @@ import Testing
             style: RecordingStyle(), motion: .empty, pointSize: size, sourceSize: size, wallpaper: nil, customBackground: nil
         ))
         let videoComposition = try await RecordingComposition.videoComposition(
-            for: composition, timeline: ClipTimeline(segments), renderer: renderer, renderSize: size
+            for: composition.asset, composition: composition, timeline: ClipTimeline(segments), renderer: renderer, renderSize: size
         )
         try await body(composition, videoComposition)
     }

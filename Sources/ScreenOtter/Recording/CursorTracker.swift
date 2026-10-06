@@ -34,11 +34,18 @@ final class CursorTracker {
             monitors.append(global)
         }
         if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
-            self?.click()
+            if Self.recordsClick(in: event.window) { self?.click() }
             return event
         }) {
             monitors.append(local)
         }
+    }
+
+    /// Whether a click in one of ScreenOtter's own windows belongs in the recording. Panels (the camera
+    /// bubble being dragged, the countdown, the recording controls) are left out of every capture, so a click
+    /// on one would zoom into, and ripple over, a spot where viewers see nothing happen.
+    static func recordsClick(in window: NSWindow?) -> Bool {
+        !(window is NSPanel)
     }
 
     /// Stops and returns the track with times relative to `start` (the first video frame), cut to `duration`.

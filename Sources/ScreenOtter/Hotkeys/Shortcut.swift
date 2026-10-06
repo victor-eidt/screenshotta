@@ -74,7 +74,8 @@ nonisolated enum KeyNames {
         UInt32(kVK_F19), UInt32(kVK_F20),
     ]
 
-    private static let special: [Int: String] = [
+    /// Keys whose name isn't the character they type.
+    static let special: [Int: String] = [
         kVK_Return: "↩", kVK_Tab: "⇥", kVK_Space: "Space", kVK_Delete: "⌫", kVK_Escape: "⎋",
         kVK_ForwardDelete: "⌦", kVK_Home: "↖", kVK_End: "↘", kVK_PageUp: "⇞", kVK_PageDown: "⇟",
         kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_DownArrow: "↓", kVK_UpArrow: "↑",
@@ -87,9 +88,14 @@ nonisolated enum KeyNames {
     /// Uses the current keyboard layout, so a Brazilian keyboard shows "Ç" instead of ";".
     static func name(for keyCode: UInt32) -> String {
         if let name = special[Int(keyCode)] { return name }
+        return layoutCharacter(for: keyCode)?.uppercased() ?? "?"
+    }
+
+    /// What the key types on the current layout without modifiers, or nil when it types nothing.
+    static func layoutCharacter(for keyCode: UInt32) -> String? {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let layoutPointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
-        else { return "?" }
+        else { return nil }
         let layoutData = Unmanaged<CFData>.fromOpaque(layoutPointer).takeUnretainedValue() as Data
 
         var deadKeyState: UInt32 = 0
@@ -102,7 +108,7 @@ nonisolated enum KeyNames {
                 OptionBits(kUCKeyTranslateNoDeadKeysBit), &deadKeyState, chars.count, &length, &chars
             )
         }
-        guard status == noErr, length > 0 else { return "?" }
-        return String(utf16CodeUnits: chars, count: length).uppercased()
+        guard status == noErr, length > 0 else { return nil }
+        return String(utf16CodeUnits: chars, count: length)
     }
 }

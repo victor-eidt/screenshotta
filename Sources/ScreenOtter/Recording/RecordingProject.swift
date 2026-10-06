@@ -15,6 +15,14 @@ nonisolated struct RecordingMetadata: Codable, Sendable {
     /// Video pixels per point.
     var scale: CGFloat
     var duration: Double
+    /// Sound recorded alongside, one file per source. Missing in recordings made before audio existed:
+    /// optional, so the synthesized decoding still reads them.
+    var audio: [RecordedAudioTrack]?
+    /// The camera recorded alongside, if it was on. Missing in older recordings, like `audio`.
+    var webcam: RecordedWebcam?
+
+    /// The audio tracks, none when the recording has no sound.
+    var audioTracks: [RecordedAudioTrack] { audio ?? [] }
 }
 
 /// Pointer positions in points, relative to the recorded content's top-left corner.
@@ -59,7 +67,7 @@ nonisolated enum RecordingBackground: Codable, Equatable, Hashable, Sendable {
 }
 
 nonisolated enum RecordingAspect: String, Codable, CaseIterable, Identifiable, Sendable {
-    case auto, wide, standard, square, vertical
+    case auto, wide, standard, square, portrait, vertical
 
     var id: String { rawValue }
 
@@ -69,6 +77,7 @@ nonisolated enum RecordingAspect: String, Codable, CaseIterable, Identifiable, S
         case .wide: "16:9"
         case .standard: "4:3"
         case .square: "1:1"
+        case .portrait: "4:5"
         case .vertical: "9:16"
         }
     }
@@ -80,6 +89,7 @@ nonisolated enum RecordingAspect: String, Codable, CaseIterable, Identifiable, S
         case .wide: 16 / 9
         case .standard: 4 / 3
         case .square: 1
+        case .portrait: 4 / 5
         case .vertical: 9 / 16
         }
     }
@@ -116,6 +126,13 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
 
     var autoZoom = true
     var zoomScale: Double = 2
+
+    /// The webcam bubble, for recordings that have one.
+    var webcam = WebcamStyle()
+    /// The keystroke pill, for recordings made with keystrokes on.
+    var keystrokes = KeystrokeStyle()
+    /// The captions' look, for recordings transcribed into captions.
+    var captions = CaptionStyle()
 
     private static let defaultsKey = "recordingStyle"
 
@@ -155,12 +172,18 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
         clickEffect = (try? c.decode(Bool.self, forKey: .clickEffect)) ?? d.clickEffect
         autoZoom = (try? c.decode(Bool.self, forKey: .autoZoom)) ?? d.autoZoom
         zoomScale = (try? c.decode(Double.self, forKey: .zoomScale)) ?? d.zoomScale
+        webcam = (try? c.decode(WebcamStyle.self, forKey: .webcam)) ?? d.webcam
+        keystrokes = (try? c.decode(KeystrokeStyle.self, forKey: .keystrokes)) ?? d.keystrokes
+        captions = (try? c.decode(CaptionStyle.self, forKey: .captions)) ?? d.captions
     }
 
     private enum CodingKeys: String, CodingKey {
         case background, backgroundBlur, padding, cornerRadius, shadow, aspect, minimalWindowFrame, windowBarColor
         case showCursor, cursorStyle, cursorSize, smoothCursor, cursorMotionBlur, hideIdleCursor, clickEffect
         case autoZoom, zoomScale
+        case webcam
+        case keystrokes
+        case captions
     }
 }
 
@@ -175,6 +198,16 @@ nonisolated struct RecordingEdits: Codable, Equatable, Sendable {
     /// Points cut from the left and right edges.
     var cutLeft: Double?
     var cutRight: Double?
+    /// Volume and mute per audio source. Missing until a track is first changed.
+    var audio: [AudioSource: AudioTrackMix]?
+    /// The webcam bubble is turned off in this video. Missing means shown.
+    var webcamHidden: Bool?
+    /// The keystroke pill is turned off in this video. Missing means shown.
+    var keystrokesHidden: Bool?
+    /// What was said into the microphone, once transcribed: editable, like the rest of the edits.
+    var captions: CaptionTrack?
+    /// The captions are turned off in this video. Missing means shown.
+    var captionsHidden: Bool?
 
     static func initial(duration: Double, clicks: [CursorRecording.Sample], style: RecordingStyle) -> RecordingEdits {
         var edits = RecordingEdits(segments: [ClipSegment(start: 0, end: duration)], zooms: [], style: style)
@@ -194,6 +227,13 @@ nonisolated struct RecordingProject: Sendable {
     var cursorURL: URL { folder.appendingPathComponent("cursor.json") }
     var editsURL: URL { folder.appendingPathComponent("edits.json") }
     var wallpaperURL: URL { folder.appendingPathComponent("wallpaper.png") }
+    /// The keys pressed while recording. Only there when the recording was made with keystrokes on.
+    var keystrokesURL: URL { folder.appendingPathComponent("keys.json") }
+
+    func audioURL(_ source: AudioSource) -> URL { folder.appendingPathComponent(source.fileName) }
+    func url(of track: RecordedAudioTrack) -> URL { folder.appendingPathComponent(track.file) }
+    var webcamURL: URL { folder.appendingPathComponent(RecordedWebcam.fileName) }
+    func url(of webcam: RecordedWebcam) -> URL { folder.appendingPathComponent(webcam.file) }
 
     static var libraryFolder: URL {
         AppFolders.support.appendingPathComponent("Recordings", isDirectory: true)
@@ -243,10 +283,12 @@ nonisolated struct RecordingProject: Sendable {
     func loadMetadata() -> RecordingMetadata? { Self.read(metadataURL) }
     func loadCursor() -> CursorRecording { Self.read(cursorURL) ?? CursorRecording() }
     func loadEdits() -> RecordingEdits? { Self.read(editsURL) }
+    func loadKeystrokes() -> KeystrokeRecording? { Self.read(keystrokesURL) }
 
     func save(_ metadata: RecordingMetadata) throws { try Self.write(metadata, to: metadataURL) }
     func save(_ cursor: CursorRecording) throws { try Self.write(cursor, to: cursorURL) }
     func save(_ edits: RecordingEdits) throws { try Self.write(edits, to: editsURL) }
+    func save(_ keystrokes: KeystrokeRecording) throws { try Self.write(keystrokes, to: keystrokesURL) }
 
     private static func read<T: Decodable>(_ url: URL) -> T? {
         guard let data = try? Data(contentsOf: url) else { return nil }
