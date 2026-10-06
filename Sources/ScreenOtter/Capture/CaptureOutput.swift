@@ -1,31 +1,43 @@
 import AppKit
+import AudioToolbox
 import ImageIO
 import UniformTypeIdentifiers
 
 /// What happens after a capture: file, clipboard, sound, thumbnail.
 enum CaptureOutput {
-    private static var shutter: NSSound? = NSSound(
-        contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif",
-        byReference: true
-    )
+    /// Played by the system sound server. NSSound set up audio in our process on its first play after launch,
+    /// which held up the main thread, and so the file and the thumbnail, for over a second.
+    private static let shutter: SystemSoundID? = {
+        let url = URL(fileURLWithPath: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif")
+        var id: SystemSoundID = 0
+        guard AudioServicesCreateSystemSoundID(url as CFURL, &id) == noErr else { return nil }
+        // Our own setting turns it off, not the system's "Play user interface sound effects".
+        var isUISound: UInt32 = 0
+        AudioServicesSetProperty(
+            kAudioServicesPropertyIsUISound, UInt32(MemoryLayout<SystemSoundID>.size), &id,
+            UInt32(MemoryLayout<UInt32>.size), &isUISound
+        )
+        return id
+    }()
 
     static func deliver(_ capture: CapturedImage, screen: NSScreen?) {
         let prefs = Preferences.shared
-        if prefs.playSound {
-            shutter?.stop()
-            shutter?.play()
+        if prefs.playSound, let shutter {
+            AudioServicesPlaySystemSound(shutter)
         }
 
+        // Encoded once, for the file and the clipboard alike.
+        let png = prefs.saveToFolder || prefs.copyToClipboard ? pngData(capture.image, scale: capture.scale) : nil
         var url: URL?
         if prefs.saveToFolder {
             do {
-                url = try save(capture, in: prefs.saveFolder)
+                url = try save(png, in: prefs.saveFolder)
             } catch {
                 presentError(error)
             }
         }
         if prefs.copyToClipboard {
-            copy(capture.image, scale: capture.scale)
+            copy(capture.image, scale: capture.scale, png: png)
         }
         if prefs.showThumbnail {
             ThumbnailController.shared.show(capture, fileURL: url, on: screen)
@@ -35,9 +47,14 @@ enum CaptureOutput {
     // MARK: - Files
 
     static func save(_ capture: CapturedImage, in folder: URL) throws -> URL {
+        try save(pngData(capture.image, scale: capture.scale), in: folder)
+    }
+
+    private static func save(_ png: Data?, in folder: URL) throws -> URL {
+        guard let png else { throw CocoaError(.fileWriteUnknown) }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = uniqueURL(in: folder, baseName: "Screenshot \(timestamp())")
-        try write(capture.image, scale: capture.scale, to: url)
+        try png.write(to: url, options: .atomic)
         return url
     }
 
@@ -86,11 +103,12 @@ enum CaptureOutput {
 
     // MARK: - Clipboard
 
-    static func copy(_ image: CGImage, scale: CGFloat) {
+    /// `png`: the image already encoded, if it is.
+    static func copy(_ image: CGImage, scale: CGFloat, png: Data? = nil) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         let item = NSPasteboardItem()
-        if let png = pngData(image, scale: scale) {
+        if let png = png ?? pngData(image, scale: scale) {
             item.setData(png, forType: .png)
         }
         let rep = NSBitmapImageRep(cgImage: image)
