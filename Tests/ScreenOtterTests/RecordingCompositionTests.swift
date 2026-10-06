@@ -49,7 +49,7 @@ import Testing
     private func withStillRecording(_ body: (AVMutableComposition, AVVideoComposition) async throws -> Void) async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("still-\(UUID().uuidString).mov")
         defer { try? FileManager.default.removeItem(at: url) }
-        try await writeVideo(to: url, frameTimes: [0, 0.5, 1.0], duration: 1.5)
+        try await TestVideo.write(to: url, frameTimes: [0, 0.5, 1.0], duration: 1.5)
 
         let asset = AVURLAsset(url: url)
         let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
@@ -64,34 +64,5 @@ import Testing
             for: composition, timeline: ClipTimeline(segments), renderer: renderer, renderSize: size
         )
         try await body(composition, videoComposition)
-    }
-
-    /// A tiny H.264 movie with frames only at `frameTimes`, like a recording of a screen that mostly stood still.
-    private func writeVideo(to url: URL, frameTimes: [Double], duration: Double) async throws {
-        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
-        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 64, AVVideoHeightKey: 64,
-        ])
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: 64, kCVPixelBufferHeightKey as String: 64,
-        ])
-        writer.add(input)
-        #expect(writer.startWriting())
-        writer.startSession(atSourceTime: .zero)
-        for (index, time) in frameTimes.enumerated() {
-            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(5)) }
-            var buffer: CVPixelBuffer?
-            CVPixelBufferCreate(nil, 64, 64, kCVPixelFormatType_32BGRA, nil, &buffer)
-            let pixels = try #require(buffer)
-            CVPixelBufferLockBaseAddress(pixels, [])
-            memset(CVPixelBufferGetBaseAddress(pixels), Int32(index * 80), CVPixelBufferGetDataSize(pixels))
-            CVPixelBufferUnlockBaseAddress(pixels, [])
-            adaptor.append(pixels, withPresentationTime: CMTime(seconds: time, preferredTimescale: 600))
-        }
-        input.markAsFinished()
-        writer.endSession(atSourceTime: CMTime(seconds: duration, preferredTimescale: 600))
-        await writer.finishWriting()
-        #expect(writer.status == .completed)
     }
 }

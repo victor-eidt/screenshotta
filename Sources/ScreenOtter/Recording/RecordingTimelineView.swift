@@ -139,7 +139,7 @@ private struct ClipBlock: View {
     private func finishTrim() {
         guard trimOrigin != nil else { return }
         trimOrigin = nil
-        doc.endInteraction()
+        doc.endTrim()
     }
 
     var body: some View {
@@ -199,7 +199,7 @@ private struct ClipBlock: View {
                     .onChanged { value in
                         if trimOrigin == nil {
                             trimOrigin = segment
-                            doc.beginInteraction()
+                            doc.beginTrim(segment.id, leading: leading)
                             doc.selection = .segment(segment.id)
                         }
                         guard let origin = trimOrigin else { return }

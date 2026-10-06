@@ -80,9 +80,13 @@ final class RecordingDocument: ObservableObject {
     private let trackDuration: Double
     private let sourceSize: CGSize
     private let renderer: RecordingRenderer
-    /// The cut last built, and the cut the player is showing (they differ while a new item is on its way).
+    /// The cut last built, and the cut the player is showing (they differ while a new item is on its way, and while trimming).
     private var composition: (segments: [ClipSegment], asset: AVMutableComposition)?
     private var playerSegments: [ClipSegment]?
+    /// The whole recording as one clip, which the player shows while a clip's edge is dragged.
+    private let wholeRecording: [ClipSegment]
+    /// While a clip's edge is dragged, the moment of the recording under it, in source seconds.
+    private var trimEdge: Double?
     private var customBackground: (path: String, image: CGImage?)?
     private let firstFrame: CGImage?
     private var chromeColors: (trim: Double, bar: CGColor, fill: CGColor)?
@@ -93,6 +97,7 @@ final class RecordingDocument: ObservableObject {
     private var redoStack: [RecordingEdits] = []
     private(set) var isInteracting = false
     private var refreshGeneration = 0
+    /// In the player's time, which is the cut it shows.
     private var pendingSeek: Double?
     private var isSeeking = false
     private var saveTask: Task<Void, Never>?
@@ -146,6 +151,7 @@ final class RecordingDocument: ObservableObject {
         sourceTrack = track
         self.trackDuration = trackDuration
         self.sourceSize = sourceSize
+        wholeRecording = [ClipSegment(start: 0, end: trackDuration)]
         timeline = ClipTimeline(edits.segments)
         renderer = RecordingRenderer(scene: RenderScene(
             style: edits.style, motion: .empty, pointSize: metadata.pointSize,
@@ -166,7 +172,7 @@ final class RecordingDocument: ObservableObject {
         observers.append(player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             MainActor.assumeIsolated {
                 guard let self, self.pendingSeek == nil, !self.isSeeking else { return }
-                self.currentTime = min(max(time.seconds, 0), self.duration)
+                self.currentTime = min(max(self.outputTime(atPlayer: time.seconds), 0), self.duration)
             }
         })
         statusObservation = player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
@@ -187,7 +193,7 @@ final class RecordingDocument: ObservableObject {
     /// Scrubbing: always lands exactly on `time`, dropping intermediate requests while a seek runs.
     func seek(to time: Double) {
         currentTime = min(max(time, 0), duration)
-        pendingSeek = currentTime
+        pendingSeek = playerTime(atOutput: currentTime)
         performPendingSeek()
     }
 
@@ -206,6 +212,17 @@ final class RecordingDocument: ObservableObject {
     func step(frames: Int) {
         player.pause()
         seek(to: currentTime + Double(frames) / 60)
+    }
+
+    /// The player's time showing output time `t` of the edits. The two differ while the player shows another cut.
+    private func playerTime(atOutput t: Double) -> Double {
+        guard let playerSegments, playerSegments != edits.segments else { return t }
+        return ClipTimeline(playerSegments).outputTime(atSource: timeline.sourceTime(atOutput: t))
+    }
+
+    private func outputTime(atPlayer t: Double) -> Double {
+        guard let playerSegments, playerSegments != edits.segments else { return t }
+        return timeline.outputTime(atSource: ClipTimeline(playerSegments).sourceTime(atOutput: t))
     }
 
     // MARK: - Editing
@@ -269,7 +286,8 @@ final class RecordingDocument: ObservableObject {
             currentTime = min(timeline.outputTime(atSource: source), duration)
         }
         if let selection, !isSelectionValid(selection) { self.selection = nil }
-        refresh()
+        // While trimming, the player keeps the whole recording and only moves to the edge (see `trim`).
+        if trimEdge == nil { refresh() }
         scheduleSave()
     }
 
@@ -391,7 +409,7 @@ final class RecordingDocument: ObservableObject {
         let generation = refreshGeneration
         let renderSize = previewSize
 
-        let segments = isInteracting ? (playerSegments ?? edits.segments) : edits.segments
+        let segments = trimEdge != nil ? wholeRecording : isInteracting ? (playerSegments ?? edits.segments) : edits.segments
         if composition?.segments != segments {
             guard let asset = try? RecordingComposition.make(track: sourceTrack, trackDuration: trackDuration, segments: segments) else { return }
             composition = (segments, asset)
@@ -411,7 +429,11 @@ final class RecordingDocument: ObservableObject {
             } else {
                 player.currentItem?.videoComposition = videoComposition
             }
-            if !isPlaying { seek(to: currentTime) }
+            if let trimEdge {
+                show(source: trimEdge)
+            } else if !isPlaying {
+                seek(to: currentTime)
+            }
         }
     }
 
@@ -447,6 +469,35 @@ final class RecordingDocument: ObservableObject {
         update { $0.segments[index].speed = speed }
     }
 
+    /// Starts dragging an edge of a clip. Until `endTrim`, the preview shows the frame at that edge: the player
+    /// switches to the whole recording, since the edge can move into what was cut before.
+    func beginTrim(_ id: UUID, leading: Bool) {
+        guard let segment = edits.segments.first(where: { $0.id == id }) else { return }
+        player.pause()
+        beginInteraction()
+        trimEdge = Self.edge(of: segment, leading: leading)
+        refresh()
+    }
+
+    func endTrim() {
+        guard trimEdge != nil else { return }
+        trimEdge = nil
+        endInteraction()
+    }
+
+    /// The first frame a clip keeps, or the last.
+    private static func edge(of segment: ClipSegment, leading: Bool) -> Double {
+        leading ? segment.start : max(segment.end - 0.001, segment.start)
+    }
+
+    /// Shows the frame at `source` while trimming, with the playhead where it lands in the cut.
+    private func show(source: Double) {
+        trimEdge = source
+        currentTime = min(timeline.outputTime(atSource: source), duration)
+        pendingSeek = ClipTimeline(playerSegments ?? edits.segments).outputTime(atSource: source)
+        performPendingSeek()
+    }
+
     /// Trims one end of a clip to `time` (source seconds), without overlapping its neighbours.
     func trim(_ id: UUID, leading: Bool, to time: Double) {
         guard let index = edits.segments.firstIndex(where: { $0.id == id }) else { return }
@@ -461,6 +512,7 @@ final class RecordingDocument: ObservableObject {
             }
             edits.segments[index] = segment
         }
+        if trimEdge != nil { show(source: Self.edge(of: edits.segments[index], leading: leading)) }
     }
 
     // MARK: - Zooms
