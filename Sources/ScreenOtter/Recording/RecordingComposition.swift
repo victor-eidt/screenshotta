@@ -129,7 +129,8 @@ nonisolated enum RecordingComposition {
     /// `timeline` describes the cut in `asset`: frames are drawn with the pointer and camera of exactly that cut.
     /// `composition` names the tracks: the screen, and the webcam when there is one.
     static func videoComposition(
-        for asset: AVAsset, composition edited: EditedComposition, timeline: ClipTimeline, renderer: RecordingRenderer, renderSize: CGSize
+        for asset: AVAsset, composition edited: EditedComposition, timeline: ClipTimeline, renderer: RecordingRenderer, renderSize: CGSize,
+        frameRate: Int = 60
     ) async throws -> AVVideoComposition {
         let duration = try await asset.load(.duration)
         // The export asset is a copy of the edited one, with the same track IDs.
@@ -142,8 +143,9 @@ nonisolated enum RecordingComposition {
             videoTrackID: edited.videoTrackID, webcamTrackID: webcamTrackID, renderer: renderer, timeline: timeline
         )]
         composition.renderSize = renderSize
-        // A steady 60 fps even where the screen (and so the recording) stood still: the pointer and camera keep moving.
-        composition.frameDuration = CMTime(value: 1, timescale: 60)
+        // A steady frame rate (60 fps unless an export asks for less) even where the screen (and so the recording)
+        // stood still: the pointer and camera keep moving.
+        composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(max(frameRate, 1)))
         return composition
     }
 

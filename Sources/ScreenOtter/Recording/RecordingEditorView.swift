@@ -110,71 +110,6 @@ private struct RecordingTopBar: View {
     }
 }
 
-private struct ExportPopover: View {
-    @ObservedObject var doc: RecordingDocument
-    let actions: RecordingEditorActions
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            switch doc.export {
-            case .idle, .failed:
-                Text("Export Video").font(.headline)
-                Picker("Resolution", selection: $doc.exportSize) {
-                    ForEach(ExportSize.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                let size = doc.exportPixelSize(doc.exportSize)
-                Text(verbatim: "MP4 · \(Int(size.width)) × \(Int(size.height)) · 60 fps · \(RecordingFormat.duration(doc.duration))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                if case let .failed(message) = doc.export {
-                    Label(message, systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.orange)
-                }
-                Button {
-                    doc.startExport()
-                } label: {
-                    Text("Export to \(Preferences.shared.saveFolder.lastPathComponent)")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .keyboardShortcut(.defaultAction)
-
-            case let .exporting(progress):
-                Text("Exporting…").font(.headline)
-                ProgressView(value: progress)
-                Text("\(Int(progress * 100))%")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-
-            case let .done(url):
-                Label("Exported", systemImage: "checkmark.circle.fill")
-                    .font(.headline)
-                    .foregroundStyle(.green)
-                Text(url.lastPathComponent)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                HStack {
-                    Button("Show in Finder") { actions.showInFinder(url) }
-                    Button("Copy") { doc.copyFile(url) }
-                    Button("Add to Shelf") { actions.addToShelf(url) }
-                }
-                Button("Export Again…") { doc.resetExport() }
-                    .buttonStyle(.link)
-            }
-        }
-        .padding(18)
-        .frame(width: 340)
-    }
-}
-
 // MARK: - Preview
 
 private struct PreviewToolbar: View {
@@ -199,7 +134,7 @@ private struct PreviewToolbar: View {
 
             Spacer()
 
-            let size = doc.exportPixelSize(doc.exportSize)
+            let size = doc.exportPixelSize(doc.exportSettings)
             Text(verbatim: "\(Int(size.width)) × \(Int(size.height))")
                 .monospacedDigit()
                 .foregroundStyle(.secondary)

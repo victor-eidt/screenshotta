@@ -67,7 +67,7 @@ nonisolated enum RecordingBackground: Codable, Equatable, Hashable, Sendable {
 }
 
 nonisolated enum RecordingAspect: String, Codable, CaseIterable, Identifiable, Sendable {
-    case auto, wide, standard, square, vertical
+    case auto, wide, standard, square, portrait, vertical
 
     var id: String { rawValue }
 
@@ -77,6 +77,7 @@ nonisolated enum RecordingAspect: String, Codable, CaseIterable, Identifiable, S
         case .wide: "16:9"
         case .standard: "4:3"
         case .square: "1:1"
+        case .portrait: "4:5"
         case .vertical: "9:16"
         }
     }
@@ -88,6 +89,7 @@ nonisolated enum RecordingAspect: String, Codable, CaseIterable, Identifiable, S
         case .wide: 16 / 9
         case .standard: 4 / 3
         case .square: 1
+        case .portrait: 4 / 5
         case .vertical: 9 / 16
         }
     }

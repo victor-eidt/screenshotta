@@ -32,21 +32,6 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
     }
 }
 
-enum ExportSize: Int, CaseIterable, Identifiable {
-    case hd = 1280, fullHD = 1920, quadHD = 2560, ultraHD = 3840
-
-    var id: Int { rawValue }
-
-    var title: String {
-        switch self {
-        case .hd: "720p"
-        case .fullHD: "1080p"
-        case .quadHD: "1440p"
-        case .ultraHD: "4K"
-        }
-    }
-}
-
 enum ExportState: Equatable {
     case idle
     case exporting(Double)
@@ -75,7 +60,10 @@ final class RecordingDocument: ObservableObject {
     @Published private(set) var currentTime: Double = 0
     @Published private(set) var isPlaying = false
     @Published var timelineZoom: Double = 1
-    @Published var exportSize: ExportSize = .fullHD
+    /// The template or custom settings the export sheet has selected, remembered for the next recording.
+    @Published var exportChoice = ExportChoice.saved() {
+        didSet { if exportChoice != oldValue { exportChoice.save() } }
+    }
     @Published private(set) var export: ExportState = .idle
     @Published private(set) var canUndo = false
     @Published private(set) var canRedo = false
@@ -435,9 +423,8 @@ final class RecordingDocument: ObservableObject {
         return RecordingRenderer.outputSize(canvas: canvas, longSide: Self.previewLongSide)
     }
 
-    func exportPixelSize(_ size: ExportSize) -> CGSize {
-        let canvas = RecordingRenderer.canvasSize(style: edits.style, sourceSize: contentSize)
-        return RecordingRenderer.outputSize(canvas: canvas, longSide: CGFloat(size.rawValue))
+    func exportPixelSize(_ settings: ExportSettings) -> CGSize {
+        settings.resolution.pixelSize(canvas: RecordingRenderer.canvasSize(style: edits.style, sourceSize: contentSize))
     }
 
     /// Pushes the edits to the renderer and the player. A new video composition makes the player redraw
@@ -694,11 +681,51 @@ final class RecordingDocument: ObservableObject {
 
     // MARK: - Export
 
+    var exportSettings: ExportSettings { exportChoice.settings }
+
+    /// Selects a template (nil for Custom), and sets the canvas to its aspect ratio as one undo step,
+    /// so the preview shows what the export will be.
+    func selectExport(template: ExportTemplate?, variant: String? = nil) {
+        var choice = exportChoice
+        choice.templateID = template?.id
+        if let template, let variant { choice.variants[template.id] = variant }
+        exportChoice = choice
+        if let aspect = choice.variant?.aspect { setAspect(aspect) }
+    }
+
+    func setAspect(_ aspect: RecordingAspect) {
+        guard aspect != edits.style.aspect else { return }
+        update { $0.style.aspect = aspect }
+    }
+
+    /// The template's canvas, when the editor's has been changed away from it since it was picked.
+    var exportAspectMismatch: RecordingAspect? {
+        guard let aspect = exportChoice.variant?.aspect, aspect != edits.style.aspect else { return nil }
+        return aspect
+    }
+
+    /// A rough size for a GIF export, nil for video.
+    var gifSizeEstimate: Int? {
+        let settings = exportSettings
+        guard settings.format == .gif else { return nil }
+        let size = exportPixelSize(settings)
+        var webcamShare = 0.0
+        if showsWebcam {
+            let bubble = WebcamLayout.frame(edits.style.webcam, canvas: size)
+            webcamShare = Double(bubble.width * bubble.height / (size.width * size.height))
+        }
+        return GIFEstimate.bytes(
+            size: size, duration: duration, fps: settings.fps,
+            zoom: GIFEstimate.zoomTime(zooms: edits.zooms, segments: edits.segments), webcamShare: webcamShare
+        )
+    }
+
     func startExport() {
         guard !isInteracting, let composition, !isExporting else { return }
         player.pause()
-        let size = exportPixelSize(exportSize)
-        let url = Self.exportURL(named: metadata.title)
+        let settings = exportSettings
+        let size = exportPixelSize(settings)
+        let url = Self.exportURL(named: metadata.title, suffix: exportChoice.fileSuffix, format: settings.format)
         // A frozen copy of the edits: changing things while exporting doesn't affect the file.
         let exportRenderer = RecordingRenderer(scene: renderer.currentScene)
         let volumes = Dictionary(uniqueKeysWithValues: audioSources.map { ($0, audioMix(for: $0).effectiveVolume) })
@@ -710,13 +737,19 @@ final class RecordingDocument: ObservableObject {
             do {
                 let videoComposition = try await RecordingComposition.videoComposition(
                     for: asset, composition: composition.edited, timeline: ClipTimeline(composition.segments),
-                    renderer: exportRenderer, renderSize: size
+                    renderer: exportRenderer, renderSize: size, frameRate: settings.fps
                 )
-                try await RecordingComposition.export(asset, videoComposition: videoComposition, audioMix: audioMix, to: url) { progress in
+                let progress: @Sendable (Double) -> Void = { progress in
                     Task { @MainActor in
                         guard case .exporting = self.export else { return }
                         self.export = .exporting(progress)
                     }
+                }
+                switch settings.format {
+                case .mp4:
+                    try await RecordingComposition.export(asset, videoComposition: videoComposition, audioMix: audioMix, to: url, progress: progress)
+                case .gif:
+                    try await GIFExport.export(asset, videoComposition: videoComposition, to: url, progress: progress)
                 }
                 export = .done(url)
                 if Preferences.shared.copyToClipboard { copyFile(url) }
@@ -741,13 +774,15 @@ final class RecordingDocument: ObservableObject {
         pasteboard.writeObjects([url as NSURL])
     }
 
-    private static func exportURL(named name: String) -> URL {
+    /// "Title – Product Hunt.gif" for a template, "Title.mp4" for custom settings, never over an existing file.
+    private static func exportURL(named title: String, suffix: String?, format: ExportFormat) -> URL {
         let folder = Preferences.shared.saveFolder
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        var url = folder.appendingPathComponent(name).appendingPathExtension("mp4")
+        let name = suffix.map { "\(title) – \($0)" } ?? title
+        var url = folder.appendingPathComponent(name).appendingPathExtension(format.fileExtension)
         var counter = 2
         while FileManager.default.fileExists(atPath: url.path) {
-            url = folder.appendingPathComponent("\(name) (\(counter))").appendingPathExtension("mp4")
+            url = folder.appendingPathComponent("\(name) (\(counter))").appendingPathExtension(format.fileExtension)
             counter += 1
         }
         return url
