@@ -35,6 +35,7 @@ struct RecordingInspector: View {
                     case .zoom: ZoomPanel(doc: doc)
                     case .clip: ClipPanel(doc: doc)
                     case .audio: AudioPanel(doc: doc)
+                    case .captions: CaptionPanel(doc: doc)
                     case .webcam: WebcamPanel(doc: doc)
                     case .keystrokes: KeystrokePanel(doc: doc)
                     }

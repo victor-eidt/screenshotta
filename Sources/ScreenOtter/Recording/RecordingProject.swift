@@ -129,6 +129,8 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
     var webcam = WebcamStyle()
     /// The keystroke pill, for recordings made with keystrokes on.
     var keystrokes = KeystrokeStyle()
+    /// The captions' look, for recordings transcribed into captions.
+    var captions = CaptionStyle()
 
     private static let defaultsKey = "recordingStyle"
 
@@ -169,6 +171,7 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
         zoomScale = (try? c.decode(Double.self, forKey: .zoomScale)) ?? d.zoomScale
         webcam = (try? c.decode(WebcamStyle.self, forKey: .webcam)) ?? d.webcam
         keystrokes = (try? c.decode(KeystrokeStyle.self, forKey: .keystrokes)) ?? d.keystrokes
+        captions = (try? c.decode(CaptionStyle.self, forKey: .captions)) ?? d.captions
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -177,6 +180,7 @@ nonisolated struct RecordingStyle: Codable, Equatable, Sendable {
         case autoZoom, zoomScale
         case webcam
         case keystrokes
+        case captions
     }
 }
 
@@ -197,6 +201,10 @@ nonisolated struct RecordingEdits: Codable, Equatable, Sendable {
     var webcamHidden: Bool?
     /// The keystroke pill is turned off in this video. Missing means shown.
     var keystrokesHidden: Bool?
+    /// What was said into the microphone, once transcribed: editable, like the rest of the edits.
+    var captions: CaptionTrack?
+    /// The captions are turned off in this video. Missing means shown.
+    var captionsHidden: Bool?
 
     static func initial(duration: Double, clicks: [CursorRecording.Sample], style: RecordingStyle) -> RecordingEdits {
         var edits = RecordingEdits(segments: [ClipSegment(start: 0, end: duration)], zooms: [], style: style)

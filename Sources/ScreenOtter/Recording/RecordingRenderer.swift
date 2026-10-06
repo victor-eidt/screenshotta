@@ -16,6 +16,8 @@ nonisolated struct RenderScene: @unchecked Sendable {
     var webcam: WebcamStyle?
     /// The keystroke pill, or nil when there are no keys to show.
     var keystrokes: KeystrokeOverlay?
+    /// The captions, or nil when there are none to show.
+    var captions: CaptionOverlay?
 
     /// The recording as framed: cut at the sides, and with its title bar replaced.
     var contentSize: CGSize { frame?.size(of: sourceSize) ?? sourceSize }
@@ -67,6 +69,8 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
     private var backdrop: (key: String, image: CIImage)?
     /// The keystroke pills for the cut last drawn.
     private var keystrokeGroups: (segments: [ClipSegment], events: [KeystrokeEvent], groups: [KeystrokeGroup])?
+    /// The captions laid out on the cut last drawn.
+    private var captionPieces: (segments: [ClipSegment], cues: [CaptionCue], pieces: [CaptionPiece])?
 
     init(scene: RenderScene) {
         self.scene = scene
@@ -147,15 +151,35 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
            let bubble = WebcamArt.bubble(camera: webcam, style: style, canvas: renderSize, zoomScale: camera.scale) {
             image = bubble.composited(over: image).cropped(to: CGRect(origin: .zero, size: renderSize))
         }
+        let content = CGRect(x: rect.minX, y: renderSize.height - rect.maxY, width: rect.width, height: rect.height)
+        var captionHeight: CGFloat = 0
+        if let overlay = scene.captions,
+           let shown = CaptionPresentation.at(outputTime, source: t, pieces: captionPieces(overlay, timeline: timeline)),
+           let caption = CaptionArt.overlay(shown, style: overlay.style, backdrop: image, canvas: renderSize, content: content) {
+            image = caption.image.composited(over: image).cropped(to: CGRect(origin: .zero, size: renderSize))
+            captionHeight = caption.frame.height * CGFloat(shown.opacity)
+        }
         if let overlay = scene.keystrokes,
            let pill = KeystrokeArt.overlay(
                groups: keystrokeGroups(overlay, timeline: timeline), style: overlay.style, at: outputTime,
-               backdrop: image, canvas: renderSize,
-               content: CGRect(x: rect.minX, y: renderSize.height - rect.maxY, width: rect.width, height: rect.height)
+               backdrop: image, canvas: renderSize, content: content,
+               // On the same edge as a caption, the pill steps back to sit beside it rather than over it.
+               lift: overlay.style.position == scene.captions?.style.position && captionHeight > 0
+                   ? captionHeight + KeystrokeLayout.height(overlay.style, canvas: renderSize) * 0.3 : 0
            ) {
             image = pill.composited(over: image).cropped(to: CGRect(origin: .zero, size: renderSize))
         }
         return image
+    }
+
+    /// The captions follow the cut being drawn, so they're laid out again only when it or they change.
+    private func captionPieces(_ overlay: CaptionOverlay, timeline: ClipTimeline) -> [CaptionPiece] {
+        if let cached = lock.withLock({ captionPieces }), cached.segments == timeline.segments, cached.cues == overlay.cues {
+            return cached.pieces
+        }
+        let pieces = CaptionTimeline.pieces(overlay.cues, timeline: timeline)
+        lock.withLock { captionPieces = (timeline.segments, overlay.cues, pieces) }
+        return pieces
     }
 
     /// The pills follow the cut being drawn, so they're regrouped only when it changes.

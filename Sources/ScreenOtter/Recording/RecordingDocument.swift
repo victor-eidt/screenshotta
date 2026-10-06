@@ -3,7 +3,7 @@ import AVFoundation
 import Combine
 
 enum RecordingInspectorTab: String, CaseIterable, Identifiable {
-    case background, cursor, zoom, clip, audio, webcam, keystrokes
+    case background, cursor, zoom, clip, audio, captions, webcam, keystrokes
 
     var id: String { rawValue }
 
@@ -14,6 +14,7 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .zoom: "Zoom"
         case .clip: "Clip"
         case .audio: "Audio"
+        case .captions: "Captions"
         case .webcam: "Camera"
         case .keystrokes: "Keystrokes"
         }
@@ -26,6 +27,7 @@ enum RecordingInspectorTab: String, CaseIterable, Identifiable {
         case .zoom: "plus.magnifyingglass"
         case .clip: "film"
         case .audio: "waveform"
+        case .captions: "captions.bubble"
         case .webcam: "person.crop.square"
         case .keystrokes: "keyboard"
         }
@@ -360,7 +362,8 @@ final class RecordingDocument: ObservableObject {
             style: style, motion: motion, pointSize: metadata.pointSize,
             sourceSize: sourceSize, wallpaper: wallpaper, customBackground: loadCustomBackground(style.background),
             frame: frame, webcam: showsWebcam ? style.webcam : nil,
-            keystrokes: showsKeystrokes ? keystrokes.map { KeystrokeOverlay(events: $0.events, style: style.keystrokes) } : nil
+            keystrokes: showsKeystrokes ? keystrokes.map { KeystrokeOverlay(events: $0.events, style: style.keystrokes) } : nil,
+            captions: showsCaptions ? edits.captions.map { CaptionOverlay(cues: $0.cues, style: style.captions) } : nil
         )
     }
 
@@ -561,6 +564,87 @@ final class RecordingDocument: ObservableObject {
         update { $0.keystrokesHidden = visible ? nil : true }
     }
 
+    // MARK: - Captions
+
+    enum TranscriptionState: Equatable {
+        case idle
+        case running(CaptionTranscriber.Phase)
+        case failed(String)
+    }
+
+    @Published private(set) var transcription: TranscriptionState = .idle
+    private var transcriptionTask: Task<Void, Never>?
+
+    /// The microphone's file, when the recording has one: captions are heard from it.
+    var microphoneURL: URL? {
+        audioTracks.first { $0.source == .microphone }.map { project.folder.appendingPathComponent($0.file) }
+    }
+
+    /// Captions are drawn: there are some, and they aren't turned off for this video.
+    var showsCaptions: Bool { !(edits.captions?.cues.isEmpty ?? true) && edits.captionsHidden != true }
+
+    func setCaptionsVisible(_ visible: Bool) {
+        update { $0.captionsHidden = visible ? nil : true }
+    }
+
+    /// Transcribes the microphone into captions (replacing any there were), as one undo step.
+    func transcribe(_ language: CaptionLanguage) {
+        guard let url = microphoneURL, transcriptionTask == nil else { return }
+        transcription = .running(.transcribing(nil))
+        transcriptionTask = Task { [weak self] in
+            do {
+                let words = try await CaptionTranscriber.transcribe(url, language: language) { phase in
+                    Task { @MainActor in
+                        guard let self, case .running = self.transcription else { return }
+                        self.transcription = .running(phase)
+                    }
+                }
+                try Task.checkCancellation()
+                guard let self else { return }
+                let cues = CaptionPhrasing.cues(words)
+                self.update { edits in
+                    edits.captions = CaptionTrack(language: language.id, cues: cues)
+                    edits.captionsHidden = nil
+                }
+                self.transcription = .idle
+            } catch {
+                self?.transcription = Task.isCancelled ? .idle : .failed(error.localizedDescription)
+            }
+            self?.transcriptionTask = nil
+        }
+    }
+
+    func cancelTranscription() {
+        transcriptionTask?.cancel()
+        transcription = .idle
+    }
+
+    /// Rewrites one caption; emptied, it's removed.
+    func setCaptionText(_ id: UUID, _ text: String) {
+        update { edits in
+            guard var track = edits.captions, let index = track.cues.firstIndex(where: { $0.id == id }) else { return }
+            if let cue = track.cues[index].withText(text) {
+                track.cues[index] = cue
+            } else {
+                track.cues.remove(at: index)
+            }
+            edits.captions = track
+        }
+    }
+
+    /// Where a caption first shows in the edited video, or nil when it was cut out.
+    func outputStart(of cue: CaptionCue) -> Double? {
+        CaptionTimeline.pieces([cue], timeline: timeline).first?.start
+    }
+
+    /// Writes the captions as .srt, timed to the edited video, where exports go. Returns the file.
+    func saveSubtitles() throws -> URL {
+        guard let cues = edits.captions?.cues, !cues.isEmpty else { throw CocoaError(.fileWriteUnknown) }
+        let url = Self.exportURL(named: metadata.title, suffix: nil, fileExtension: "srt")
+        try CaptionSRT.text(CaptionTimeline.pieces(cues, timeline: timeline)).write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
     // MARK: - Clips
 
     /// The selected clip, or else the one under the playhead.
@@ -725,7 +809,7 @@ final class RecordingDocument: ObservableObject {
         player.pause()
         let settings = exportSettings
         let size = exportPixelSize(settings)
-        let url = Self.exportURL(named: metadata.title, suffix: exportChoice.fileSuffix, format: settings.format)
+        let url = Self.exportURL(named: metadata.title, suffix: exportChoice.fileSuffix, fileExtension: settings.format.fileExtension)
         // A frozen copy of the edits: changing things while exporting doesn't affect the file.
         let exportRenderer = RecordingRenderer(scene: renderer.currentScene)
         let volumes = Dictionary(uniqueKeysWithValues: audioSources.map { ($0, audioMix(for: $0).effectiveVolume) })
@@ -775,14 +859,14 @@ final class RecordingDocument: ObservableObject {
     }
 
     /// "Title – Product Hunt.gif" for a template, "Title.mp4" for custom settings, never over an existing file.
-    private static func exportURL(named title: String, suffix: String?, format: ExportFormat) -> URL {
+    private static func exportURL(named title: String, suffix: String?, fileExtension: String) -> URL {
         let folder = Preferences.shared.saveFolder
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let name = suffix.map { "\(title) – \($0)" } ?? title
-        var url = folder.appendingPathComponent(name).appendingPathExtension(format.fileExtension)
+        var url = folder.appendingPathComponent(name).appendingPathExtension(fileExtension)
         var counter = 2
         while FileManager.default.fileExists(atPath: url.path) {
-            url = folder.appendingPathComponent("\(name) (\(counter))").appendingPathExtension(format.fileExtension)
+            url = folder.appendingPathComponent("\(name) (\(counter))").appendingPathExtension(fileExtension)
             counter += 1
         }
         return url

@@ -423,8 +423,14 @@ nonisolated enum KeystrokeLayout {
 
     /// The centre of a pill `size` big, for the video at `content` on a `canvas`.
     static func center(_ style: KeystrokeStyle, size: CGSize, canvas: CGSize, content: CGRect) -> CGPoint {
+        center(style.position, size: size, canvas: canvas, content: content)
+    }
+
+    /// The same for anything set at `position` like the pill (the captions): in the padding when there's room
+    /// for it, otherwise just inside the video.
+    static func center(_ position: KeystrokePosition, size: CGSize, canvas: CGSize, content: CGRect) -> CGPoint {
         let h = size.height
-        let below = style.position == .bottom
+        let below = position == .bottom
         let band = below ? canvas.height - content.maxY : content.minY
         let y: CGFloat
         if band >= h * (1 + 2 * bandGap) {

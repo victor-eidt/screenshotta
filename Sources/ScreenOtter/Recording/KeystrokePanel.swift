@@ -17,8 +17,13 @@ struct KeystrokePanel: View {
                     InspectorSection("Style") {
                         HStack(spacing: 8) {
                             ForEach(KeystrokeTheme.allCases) { theme in
-                                KeystrokeThemeTile(theme: theme, selected: style.theme == theme) {
+                                OverlayThemeTile(theme: theme, selected: style.theme == theme) {
                                     doc.update { $0.style.keystrokes.theme = theme }
+                                } sample: {
+                                    HStack(spacing: 1.5) {
+                                        Text("⌘").opacity(0.62)
+                                        Text("K")
+                                    }
                                 }
                             }
                         }
@@ -94,21 +99,20 @@ struct KeystrokePanel: View {
     }
 }
 
-/// A theme as a small preview: a "⌘K" pill in that theme on a gradient.
-private struct KeystrokeThemeTile: View {
+/// A theme as a small preview: `sample` ("⌘K", a caption) on a pill in that theme, over a gradient.
+/// The keystroke pill and the captions share it.
+struct OverlayThemeTile<Sample: View>: View {
     let theme: KeystrokeTheme
     let selected: Bool
     let action: () -> Void
+    @ViewBuilder let sample: Sample
 
     var body: some View {
         Button(action: action) {
             VStack(spacing: 7) {
                 ZStack {
                     LinearGradient(colors: [Color(red: 0.35, green: 0.33, blue: 0.75), Color(red: 0.62, green: 0.4, blue: 0.9)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    HStack(spacing: 1.5) {
-                        Text("⌘").opacity(0.62)
-                        Text("K")
-                    }
+                    sample
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(theme == .dark ? Color.white : Color(white: 0.07))
                     .padding(.horizontal, 9)

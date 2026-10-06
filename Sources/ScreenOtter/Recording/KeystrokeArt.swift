@@ -104,16 +104,18 @@ nonisolated enum KeystrokeArt {
         return label
     }
 
-    static func body(theme: KeystrokeTheme, size: CGSize) -> Body? {
+    /// `corner`: the corner radius, for boxes taller than one line (the captions'); the pill's own by default.
+    static func body(theme: KeystrokeTheme, size: CGSize, corner: CGFloat? = nil) -> Body? {
         let h = size.height.rounded(), width = size.width.rounded()
         guard h >= 8, width >= h else { return nil }
-        let key = "\(theme.rawValue)-\(width)x\(h)"
+        let fraction = corner.map { $0 / h } ?? cornerFraction
+        let key = "\(theme.rawValue)-\(width)x\(h)-\(fraction)"
         if let cached = lock.withLock({ bodies[key] }) { return cached }
 
         let colors = palette(theme)
         let pad = (h * 0.7).rounded(.up)
         let pillRect = CGRect(x: pad, y: pad, width: width, height: h)
-        let path = shape(in: pillRect)
+        let path = shape(in: pillRect, cornerFraction: fraction)
         guard let image = draw(width: Int(width + pad * 2), height: Int(h + pad * 2), { ctx in
             // A wide ambient shadow for lift and a tight one that seats the edge; cut out under the pill so
             // the glass stays clear.
@@ -150,7 +152,7 @@ nonisolated enum KeystrokeArt {
 
         guard let mask = draw(width: Int(width), height: Int(h), { ctx in
             ctx.setFillColor(CGColor(gray: 1, alpha: 1))
-            ctx.addPath(shape(in: CGRect(x: 0, y: 0, width: width, height: h)))
+            ctx.addPath(shape(in: CGRect(x: 0, y: 0, width: width, height: h), cornerFraction: fraction))
             ctx.fillPath()
         }) else { return nil }
 
@@ -164,7 +166,7 @@ nonisolated enum KeystrokeArt {
     }
 
     /// The pill's outline: a rounded rectangle with continuous corners, like the webcam bubble's squircle.
-    static func shape(in rect: CGRect) -> CGPath {
+    static func shape(in rect: CGRect, cornerFraction: CGFloat = cornerFraction) -> CGPath {
         let path = CGMutablePath()
         path.addLines(between: WebcamShape.continuousRoundedRect(in: rect, cornerFraction: cornerFraction, exponent: 3.6, pointsPerCorner: 48))
         path.closeSubpath()
@@ -231,8 +233,9 @@ nonisolated enum KeystrokeArt {
 
     /// The pill at output time `t` over `backdrop` (the finished frame, Core Image coordinates), or nil when
     /// no keys are showing. `content` is where the video sits, in top-left-origin output pixels.
+    /// `lift` moves the pill away from its edge, to make room for a caption showing there.
     static func overlay(
-        groups: [KeystrokeGroup], style: KeystrokeStyle, at t: Double, backdrop: CIImage, canvas: CGSize, content: CGRect
+        groups: [KeystrokeGroup], style: KeystrokeStyle, at t: Double, backdrop: CIImage, canvas: CGSize, content: CGRect, lift: CGFloat = 0
     ) -> CIImage? {
         guard let p = KeystrokePresentation.at(t, groups: groups), p.opacity > 0.01 else { return nil }
         let h = KeystrokeLayout.height(style, canvas: canvas)
@@ -270,8 +273,8 @@ nonisolated enum KeystrokeArt {
         var pill = keys.composited(over: CIImage(cgImage: body.image).transformed(by: CGAffineTransform(translationX: -body.padding, y: -body.padding)))
 
         var center = KeystrokeLayout.center(style, size: size, canvas: canvas, content: content)
-        // It rises in from the edge it sits on.
-        center.y += CGFloat(p.rise) * h * (style.position == .top ? -1 : 1)
+        // It rises in from the edge it sits on, and steps back from it by `lift`.
+        center.y += (CGFloat(p.rise) * h - lift) * (style.position == .top ? -1 : 1)
         let k = CGFloat(p.scale)
         let scaled = CGSize(width: size.width * k, height: size.height * k)
         var origin = CGPoint(x: center.x - scaled.width / 2, y: canvas.height - center.y - scaled.height / 2)
@@ -288,13 +291,13 @@ nonisolated enum KeystrokeArt {
         return fade(pill, p.opacity)
     }
 
-    private static func fade(_ image: CIImage, _ opacity: Double) -> CIImage {
+    static func fade(_ image: CIImage, _ opacity: Double) -> CIImage {
         guard opacity < 0.999 else { return image }
         return image.applyingFilter("CIColorMatrix", parameters: ["inputAVector": CIVector(x: 0, y: 0, z: 0, w: opacity)])
     }
 
     /// The video behind the pill, blurred and a little more saturated, clipped to the pill: frosted glass.
-    private static func glass(behind rect: CGRect, mask: CIImage, backdrop: CIImage, height: CGFloat) -> CIImage? {
+    static func glass(behind rect: CGRect, mask: CIImage, backdrop: CIImage, height: CGFloat) -> CIImage? {
         let sigma = max(2, height * 0.3)
         let blurred = backdrop.clampedToExtent()
             .cropped(to: rect.insetBy(dx: -sigma * 3, dy: -sigma * 3))
