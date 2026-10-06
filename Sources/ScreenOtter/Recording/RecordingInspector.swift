@@ -372,7 +372,7 @@ private struct ClipPanel: View {
 
 // MARK: - Controls
 
-private struct InspectorSection<Content: View>: View {
+struct InspectorSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
 
@@ -389,7 +389,7 @@ private struct InspectorSection<Content: View>: View {
     }
 }
 
-private struct InspectorToggle: View {
+struct InspectorToggle: View {
     let title: String
     var detail: String?
     @Binding var isOn: Bool
@@ -414,7 +414,7 @@ private struct InspectorToggle: View {
     }
 }
 
-private struct InspectorSlider: View {
+struct InspectorSlider: View {
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>

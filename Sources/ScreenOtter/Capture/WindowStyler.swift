@@ -1,7 +1,7 @@
 import CoreGraphics
 
 /// Puts a captured window on its desktop wallpaper: rounded corners, soft shadow, padding.
-enum WindowStyler {
+nonisolated enum WindowStyler {
     struct Style {
         var padding: CGFloat
         var cornerRadius: CGFloat

@@ -1,6 +1,6 @@
 import AppKit
 
-enum WindowBackground: String, CaseIterable, Identifiable {
+nonisolated enum WindowBackground: String, CaseIterable, Identifiable {
     case wallpaper
     case transparent
 
@@ -54,6 +54,7 @@ final class Preferences: ObservableObject {
         static let windowPadding = "windowPadding"
         static let windowCornerRadius = "windowCornerRadius"
         static let windowShadow = "windowShadow"
+        static let windowMinimalTitleBar = "windowMinimalTitleBar"
         static let bringWindowToFront = "bringWindowToFront"
         static let areaShortcut = "areaShortcut"
         static let windowShortcut = "windowShortcut"
@@ -80,6 +81,8 @@ final class Preferences: ObservableObject {
     @Published var windowPadding: Double { didSet { defaults.set(windowPadding, forKey: Key.windowPadding) } }
     @Published var windowCornerRadius: Double { didSet { defaults.set(windowCornerRadius, forKey: Key.windowCornerRadius) } }
     @Published var windowShadow: Bool { didSet { defaults.set(windowShadow, forKey: Key.windowShadow) } }
+    /// Window shots swap the app's own top bar for a thin plain one with just the traffic lights.
+    @Published var windowMinimalTitleBar: Bool { didSet { defaults.set(windowMinimalTitleBar, forKey: Key.windowMinimalTitleBar) } }
     @Published var bringWindowToFront: Bool { didSet { defaults.set(bringWindowToFront, forKey: Key.bringWindowToFront) } }
     @Published var recordingCountdown: Bool { didSet { defaults.set(recordingCountdown, forKey: Key.recordingCountdown) } }
 
@@ -144,6 +147,7 @@ final class Preferences: ObservableObject {
         windowPadding = defaults.double(forKey: Key.windowPadding)
         windowCornerRadius = defaults.double(forKey: Key.windowCornerRadius)
         windowShadow = defaults.bool(forKey: Key.windowShadow)
+        windowMinimalTitleBar = defaults.bool(forKey: Key.windowMinimalTitleBar)
         bringWindowToFront = defaults.bool(forKey: Key.bringWindowToFront)
         shakeToOpenShelf = defaults.bool(forKey: Key.shakeToOpenShelf)
         recordingCountdown = defaults.bool(forKey: Key.recordingCountdown)

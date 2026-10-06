@@ -538,6 +538,12 @@ private struct WindowStylePane: View {
                 SliderRow(title: "Corner radius", value: $prefs.windowCornerRadius, range: 0...30, unit: "pt")
                 RowDivider()
                 ToggleRow(title: "Drop shadow", isOn: $prefs.windowShadow)
+                RowDivider()
+                ToggleRow(
+                    title: "Minimal title bar",
+                    detail: "Swaps the app's own top bar for a thin, plain one with just the traffic lights. The editor can change it, and cut the window's sides, for each shot.",
+                    isOn: $prefs.windowMinimalTitleBar
+                )
             }
 
             SettingsSection {

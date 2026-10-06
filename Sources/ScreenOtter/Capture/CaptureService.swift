@@ -19,6 +19,8 @@ struct CapturedImage {
     let image: CGImage
     /// Pixels per point, so saved files and the clipboard keep Retina sizing.
     let scale: CGFloat
+    /// Window captures: the window apart from its background and how it's framed, so the editor can frame it again.
+    var window: (shot: WindowShot, frame: WindowFrame)?
 }
 
 enum CaptureService {
@@ -120,16 +122,16 @@ enum CaptureService {
             shadow: prefs.windowShadow,
             background: prefs.windowBackground
         )
-        let frameInDisplay = window.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
-        let composed = WindowStyler.compose(
+        let shot = WindowShot(
             window: windowImage,
-            frameInDisplay: frameInDisplay,
             scale: scale,
+            frameInDisplay: window.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY),
             wallpaper: wallpaper,
             displaySize: display.frame.size,
             style: style
         )
-        return CapturedImage(image: composed ?? windowImage, scale: scale)
+        let frame = shot.frame(minimalTitleBar: prefs.windowMinimalTitleBar)
+        return CapturedImage(image: shot.compose(frame) ?? windowImage, scale: scale, window: (shot, frame))
     }
 
     /// The display's desktop picture at `scale`: captured live, or read from its file.

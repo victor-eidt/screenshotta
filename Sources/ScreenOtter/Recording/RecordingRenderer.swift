@@ -139,7 +139,7 @@ nonisolated final class RecordingRenderer: @unchecked Sendable {
     }
 
     /// The video frame cut at its edges and with its title bar replaced, when framed; origin at zero either way.
-    private static func framedSource(_ source: CIImage, frame: RecordingFrame?) -> CIImage {
+    static func framedSource(_ source: CIImage, frame: RecordingFrame?) -> CIImage {
         let extent = source.extent
         let image = source.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
         guard let frame else { return image }

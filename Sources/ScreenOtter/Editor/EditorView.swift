@@ -45,6 +45,9 @@ struct EditorView: View {
 
             ToolGroup {
                 ToolButton(tool: .crop, selection: $doc.tool)
+                if let shot = doc.windowShot {
+                    WindowFrameButton(doc: doc, shot: shot)
+                }
             }
             ToolGroup {
                 ForEach(EditorTool.drawing) { tool in
@@ -187,6 +190,85 @@ private struct ToolButton: View {
         }
         .buttonStyle(.plain)
         .help(tool.help)
+    }
+}
+
+/// Window shots: the window's frame, as in window recordings.
+private struct WindowFrameButton: View {
+    @ObservedObject var doc: EditorDocument
+    let shot: WindowShot
+    @State private var isShown = false
+
+    var body: some View {
+        Button { isShown.toggle() } label: {
+            Image(systemName: "macwindow")
+                .font(.system(size: 14, weight: isShown ? .semibold : .regular))
+                .frame(width: 30, height: 30)
+                .foregroundStyle(isShown ? Brand.accent : Color.primary.opacity(0.8))
+                .background(Circle().fill(isShown ? Brand.accent.opacity(0.2) : .clear))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help("Window frame")
+        .popover(isPresented: $isShown, arrowEdge: .bottom) {
+            WindowFramePanel(doc: doc, shot: shot)
+        }
+    }
+}
+
+private struct WindowFramePanel: View {
+    @ObservedObject var doc: EditorDocument
+    let shot: WindowShot
+
+    var body: some View {
+        let minimal = doc.windowFrame?.minimalTitleBar ?? false
+        VStack(alignment: .leading, spacing: 22) {
+            InspectorToggle(
+                title: "Minimal title bar",
+                detail: "Swaps the app's own top bar for a thin, plain one with just the traffic lights, so every window looks alike.",
+                isOn: Binding(get: { minimal }, set: { on in change { $0.minimalTitleBar = on } })
+            )
+            InspectorSection("Cut") {
+                VStack(alignment: .leading, spacing: 14) {
+                    InspectorSlider(
+                        title: "Top", value: cut(\.top), range: 0...min(160, (shot.frameInDisplay.height / 2).rounded()),
+                        format: Self.points, onEditing: editing
+                    )
+                    .disabled(!minimal)
+                    InspectorSlider(title: "Left", value: cut(\.left), range: 0...shot.maximumSideCut, format: Self.points, onEditing: editing)
+                    InspectorSlider(title: "Right", value: cut(\.right), range: 0...shot.maximumSideCut, format: Self.points, onEditing: editing)
+                }
+            }
+        }
+        .font(.system(size: 12.5))
+        .padding(18)
+        .frame(width: 300)
+    }
+
+    private static func points(_ value: Double) -> String { "\(Int(value)) pt" }
+
+    /// One undo step per toggle.
+    private func change(_ edit: (inout WindowFrame) -> Void) {
+        guard var frame = doc.windowFrame else { return }
+        edit(&frame)
+        doc.checkpoint()
+        doc.setWindowFrame(frame)
+    }
+
+    /// Sliders: one undo step per drag, taken when it begins.
+    private func cut(_ keyPath: WritableKeyPath<WindowFrame, Double>) -> Binding<Double> {
+        Binding(
+            get: { doc.windowFrame?[keyPath: keyPath] ?? 0 },
+            set: { value in
+                guard var frame = doc.windowFrame else { return }
+                frame[keyPath: keyPath] = value.rounded()
+                doc.setWindowFrame(frame)
+            }
+        )
+    }
+
+    private func editing(_ began: Bool) {
+        if began { doc.checkpoint() }
     }
 }
 

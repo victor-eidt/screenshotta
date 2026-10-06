@@ -1,8 +1,16 @@
 import AppKit
 
 final class EditorDocument: ObservableObject {
-    let image: CGImage
+    @Published private(set) var image: CGImage
     let scale: CGFloat
+    /// Window screenshots: the window apart from its background, so it can be framed again.
+    let windowShot: WindowShot?
+    /// How the window is framed, as last set; `image` follows once it's composed.
+    @Published private(set) var windowFrame: WindowFrame?
+    /// The frame `image` was composed with. Annotations and the crop are placed on that image.
+    private var composedFrame: WindowFrame?
+    private var isComposing = false
+    private var composeGeneration = 0
 
     @Published var fileURL: URL?
     @Published var annotations: [Annotation] = []
@@ -29,6 +37,7 @@ final class EditorDocument: ObservableObject {
     private struct Snapshot {
         var annotations: [Annotation]
         var crop: CGRect
+        var windowFrame: WindowFrame?
     }
 
     @Published private var undoStack: [Snapshot] = []
@@ -42,6 +51,9 @@ final class EditorDocument: ObservableObject {
     init(capture: CapturedImage, fileURL: URL?) {
         image = capture.image
         scale = capture.scale
+        windowShot = capture.window?.shot
+        windowFrame = capture.window?.frame
+        composedFrame = capture.window?.frame
         self.fileURL = fileURL
         crop = CGRect(x: 0, y: 0, width: capture.image.width, height: capture.image.height)
     }
@@ -50,7 +62,7 @@ final class EditorDocument: ObservableObject {
 
     /// Call before every change so it can be undone.
     func checkpoint() {
-        undoStack.append(Snapshot(annotations: annotations, crop: crop))
+        undoStack.append(snapshot)
         redoStack.removeAll()
         isDirty = true
     }
@@ -68,18 +80,30 @@ final class EditorDocument: ObservableObject {
     }
 
     func undo() {
-        guard let snapshot = undoStack.popLast() else { return }
-        redoStack.append(Snapshot(annotations: annotations, crop: crop))
-        restore(snapshot)
+        guard let previous = undoStack.popLast() else { return }
+        redoStack.append(snapshot)
+        restore(previous)
     }
 
     func redo() {
-        guard let snapshot = redoStack.popLast() else { return }
-        undoStack.append(Snapshot(annotations: annotations, crop: crop))
-        restore(snapshot)
+        guard let next = redoStack.popLast() else { return }
+        undoStack.append(snapshot)
+        restore(next)
+    }
+
+    /// With the frame of the image on screen, which is what the annotations and the crop are placed on.
+    private var snapshot: Snapshot {
+        Snapshot(annotations: annotations, crop: crop, windowFrame: composedFrame)
     }
 
     private func restore(_ snapshot: Snapshot) {
+        // A frame still being composed is dropped: the image goes back to the one the snapshot was taken on.
+        composeGeneration += 1
+        if let frame = snapshot.windowFrame, frame != composedFrame, let shot = windowShot, let framed = shot.compose(frame) {
+            image = framed
+            composedFrame = frame
+        }
+        windowFrame = composedFrame
         annotations = snapshot.annotations
         crop = snapshot.crop
         selectedID = nil
@@ -99,6 +123,60 @@ final class EditorDocument: ObservableObject {
     func cancelCrop() {
         pendingCrop = crop
         tool = .arrow
+    }
+
+    // MARK: - Window frame
+
+    /// Frames the window anew; the image follows as soon as it's composed, off the main thread so sliders
+    /// stay smooth. Call `checkpoint()` first, once per gesture. The minimal title bar is remembered for
+    /// the next window shots.
+    func setWindowFrame(_ frame: WindowFrame) {
+        guard windowShot != nil, frame != windowFrame else { return }
+        windowFrame = frame
+        if Preferences.shared.windowMinimalTitleBar != frame.minimalTitleBar {
+            Preferences.shared.windowMinimalTitleBar = frame.minimalTitleBar
+        }
+        composeLatest()
+    }
+
+    private func composeLatest() {
+        guard !isComposing, let shot = windowShot, let frame = windowFrame, frame != composedFrame else { return }
+        isComposing = true
+        let generation = composeGeneration
+        Task {
+            let framed = await Self.compose(shot, frame)
+            isComposing = false
+            if generation == composeGeneration {
+                if let framed {
+                    show(framed, framedAs: frame)
+                } else if windowFrame == frame {
+                    // Couldn't be drawn: the controls go back to what's shown rather than retrying.
+                    windowFrame = composedFrame
+                }
+            }
+            composeLatest()
+        }
+    }
+
+    @concurrent
+    private static func compose(_ shot: WindowShot, _ frame: WindowFrame) async -> CGImage? {
+        shot.compose(frame)
+    }
+
+    /// Swaps in a newly framed image, moving the annotations and the crop with the window.
+    private func show(_ framed: CGImage, framedAs frame: WindowFrame) {
+        guard let shot = windowShot, let old = composedFrame else { return }
+        let from = shot.contentOrigin(old), to = shot.contentOrigin(frame)
+        let delta = CGPoint(x: to.x - from.x, y: to.y - from.y)
+        let wasWhole = crop == imageBounds
+        image = framed
+        composedFrame = frame
+        for index in annotations.indices {
+            annotations[index].translate(by: delta)
+        }
+        let moved = crop.offsetBy(dx: delta.x, dy: delta.y).intersection(imageBounds)
+        crop = wasWhole || moved.width < 4 || moved.height < 4 ? imageBounds : moved
+        if tool == .crop { pendingCrop = crop }
     }
 
     // MARK: - Output

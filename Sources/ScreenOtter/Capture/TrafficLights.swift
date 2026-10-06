@@ -2,7 +2,7 @@ import CoreGraphics
 
 /// Inactive windows draw gray traffic lights. This finds them in a window capture
 /// and paints the active red / yellow / green over them, so window shots always look "live".
-enum TrafficLights {
+nonisolated enum TrafficLights {
     private static let colors: [CGColor] = [
         CGColor(srgbRed: 1.00, green: 0.373, blue: 0.341, alpha: 1), // close
         CGColor(srgbRed: 0.996, green: 0.737, blue: 0.180, alpha: 1), // minimize
