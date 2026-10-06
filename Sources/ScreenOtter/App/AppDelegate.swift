@@ -63,20 +63,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         statusItem.menu = nil
         statusItem.length = NSStatusItem.variableLength
-        button.image = NSImage(systemSymbolName: "stop.circle.fill", accessibilityDescription: "Stop Recording")?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular).applying(.init(paletteColors: [.white, .systemRed])))
-        button.imagePosition = .imageLeading
+        button.title = ""
         button.target = self
         button.action = #selector(toggleRecording)
         button.toolTip = "Stop Recording"
         let tick = { [weak button] in
             let seconds = Int(Date().timeIntervalSince(since))
-            button?.title = " \(seconds / 60):\(String(format: "%02d", seconds % 60))"
+            button?.image = Self.recordingImage(elapsed: "\(seconds / 60):\(String(format: "%02d", seconds % 60))")
         }
         tick()
         let timer = Timer(timeInterval: 0.5, repeats: true) { _ in MainActor.assumeIsolated { tick() } }
         RunLoop.main.add(timer, forMode: .common)
         recordingTimer = timer
+    }
+
+    /// A red stop square and the elapsed time, as one narrow image whose width doesn't change as the seconds
+    /// tick. Next to the notch, menu bar items that don't fit are hidden (ours first, being the newest), and
+    /// macOS adds its own recording indicator while we record: a wider item, or one that keeps resizing, vanishes.
+    private static func recordingImage(elapsed: String) -> NSImage {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        let stop: CGFloat = 8, gap: CGFloat = 4
+        let textWidth = ceil((elapsed as NSString).size(withAttributes: [.font: font]).width)
+        let image = NSImage(size: NSSize(width: stop + gap + textWidth, height: 18), flipped: false) { rect in
+            NSColor.systemRed.setFill()
+            NSBezierPath(roundedRect: NSRect(x: 0, y: (rect.height - stop) / 2, width: stop, height: stop), xRadius: 2, yRadius: 2).fill()
+            // Drawn in the menu bar's appearance, so labelColor follows it.
+            let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+            let size = (elapsed as NSString).size(withAttributes: attributes)
+            (elapsed as NSString).draw(at: NSPoint(x: stop + gap, y: ((rect.height - size.height) / 2).rounded()), withAttributes: attributes)
+            return true
+        }
+        image.accessibilityDescription = "Stop Recording, \(elapsed)"
+        return image
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

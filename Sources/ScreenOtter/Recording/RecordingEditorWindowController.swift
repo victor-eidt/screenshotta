@@ -50,6 +50,7 @@ final class RecordingEditorWindowController: NSWindowController, NSWindowDelegat
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.barHeight = RecordingEditorView.barHeight
         window.title = document.metadata.title
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = NSColor(white: 0.075, alpha: 1)
@@ -108,7 +109,7 @@ final class RecordingEditorWindowController: NSWindowController, NSWindowDelegat
 }
 
 /// Editor shortcuts that work wherever focus is, except while typing in a text field.
-final class RecordingEditorWindow: NSWindow {
+final class RecordingEditorWindow: TallTitleBarWindow {
     weak var doc: RecordingDocument?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {

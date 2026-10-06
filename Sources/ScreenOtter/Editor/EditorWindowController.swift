@@ -45,6 +45,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
+        window.barHeight = EditorView.barHeight
         window.title = document.fileURL?.deletingPathExtension().lastPathComponent ?? "Screenshot"
         window.appearance = NSAppearance(named: .darkAqua)
         window.isMovableByWindowBackground = true
@@ -146,7 +147,20 @@ extension NSWindow {
     }
 }
 
-final class EditorWindow: NSWindow {
+/// A window whose top bar is taller than the standard title bar, with the traffic lights centered in it.
+class TallTitleBarWindow: NSWindow {
+    var barHeight: CGFloat?
+
+    /// AppKit lays the title bar out again by itself (when the title or the appearance changes, on resize),
+    /// back at its standard height, and may leave the buttons where they were, cut off at the top.
+    /// Every layout pass puts the bar back.
+    override func layoutIfNeeded() {
+        super.layoutIfNeeded()
+        if let barHeight { centerTrafficLights(inBarOfHeight: barHeight) }
+    }
+}
+
+final class EditorWindow: TallTitleBarWindow {
     var onUndo: (() -> Void)?
     var onRedo: (() -> Void)?
     var onCopy: (() -> Void)?

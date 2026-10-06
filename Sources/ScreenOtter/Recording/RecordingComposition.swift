@@ -15,10 +15,15 @@ nonisolated enum RecordingCompositionError: LocalizedError {
 /// Builds the edited video: the kept clips back to back at their speeds, drawn through the renderer.
 nonisolated enum RecordingComposition {
     private static let timescale: CMTimeScale = 6000
+    private static let videoTrackID: CMPersistentTrackID = 1
+    /// An empty track the length of the cut, that the frames are timed by (see `videoComposition`).
+    private static let frameTimingTrackID: CMPersistentTrackID = 2
 
     static func make(track: AVAssetTrack, trackDuration: Double, segments: [ClipSegment]) throws -> AVMutableComposition {
         let composition = AVMutableComposition()
-        guard let video = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+        guard let video = composition.addMutableTrack(withMediaType: .video, preferredTrackID: videoTrackID),
+              let timing = composition.addMutableTrack(withMediaType: .video, preferredTrackID: frameTimingTrackID)
+        else {
             throw RecordingCompositionError.noVideo
         }
         var cursor = CMTime.zero
@@ -34,15 +39,19 @@ nonisolated enum RecordingComposition {
             }
             cursor = cursor + scaled
         }
+        timing.insertEmptyTimeRange(CMTimeRange(start: .zero, duration: cursor))
         return composition
     }
 
-    /// `timeline` describes the cut in `asset`: frames are drawn with the pointer and camera of exactly that cut.
+    /// `timeline` describes the cut in `asset`, made by `make`: frames are drawn with the pointer and camera of exactly that cut.
     static func videoComposition(for asset: AVAsset, timeline: ClipTimeline, renderer: RecordingRenderer, renderSize: CGSize) async throws -> AVVideoComposition {
         let composition = try await AVMutableVideoComposition.videoComposition(with: asset, applyingCIFiltersWithHandler: handler(renderer, timeline: timeline))
         composition.renderSize = renderSize
         // A steady 60 fps even where the screen (and so the recording) stood still: the pointer and camera keep moving.
+        // On its own, frameDuration only caps the rate: frames are drawn when the recording has a new one, and the
+        // recording only has one when the screen changed. Over an empty track they're drawn at frameDuration.
         composition.frameDuration = CMTime(value: 1, timescale: 60)
+        composition.sourceTrackIDForFrameTiming = frameTimingTrackID
         return composition
     }
 
