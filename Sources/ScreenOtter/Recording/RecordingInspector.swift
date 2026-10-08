@@ -314,6 +314,23 @@ private struct ZoomPanel: View {
                         format: { String(format: "%.1f×", $0) },
                         onEditing: doc.sliderEditing
                     )
+                    SegmentedPills(
+                        options: ZoomFocusMode.allCases,
+                        selection: Binding(
+                            get: { zoom.focus == nil ? .pointer : .spot },
+                            set: { mode in
+                                doc.setZoomFocus(id, mode == .spot ? doc.initialZoomFocus(zoom) : nil)
+                                doc.showZoom(zoom)
+                            }
+                        ),
+                        title: \.title
+                    )
+                    if let focus = zoom.focus {
+                        ZoomSpotPicker(doc: doc, zoom: zoom, focus: focus)
+                        Text("Drag the frame, or click where the zoom should look.")
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Text("\(RecordingFormat.duration(zoom.end - zoom.start))\(zoom.isAuto ? " · from clicks" : "")")
                         .foregroundStyle(.secondary)
                     Button(role: .destructive) { doc.deleteZoom(id) } label: {
@@ -327,6 +344,86 @@ private struct ZoomPanel: View {
             Text("Click or drag on the zoom track below to add a zoom. Drag a zoom to move it, or its ends to resize it.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private enum ZoomFocusMode: CaseIterable {
+    case pointer, spot
+
+    var title: String {
+        switch self {
+        case .pointer: "Follow pointer"
+        case .spot: "Fixed spot"
+        }
+    }
+}
+
+/// A frame of the recording with the zoomed-in view drawn on it, to drag where the zoom should look.
+private struct ZoomSpotPicker: View {
+    @ObservedObject var doc: RecordingDocument
+    let zoom: ZoomSegment
+    let focus: CGPoint
+    @State private var frame: CGImage?
+
+    var body: some View {
+        let aspect = frame.map { CGFloat($0.width) / CGFloat(max($0.height, 1)) } ?? 16 / 10
+        let view = doc.zoomViewSize(scale: zoom.scale)
+        GeometryReader { proxy in
+            let size = proxy.size
+            let box = CGSize(width: view.width * size.width, height: view.height * size.height)
+            let center = CGPoint(x: clamped(focus.x, view.width) * size.width, y: clamped(focus.y, view.height) * size.height)
+            ZStack(alignment: .topLeading) {
+                if let frame {
+                    Image(decorative: frame, scale: 1).resizable()
+                } else {
+                    Color.white.opacity(0.05)
+                }
+                // Dim what the zoom leaves out.
+                Rectangle()
+                    .fill(Color.black.opacity(0.45))
+                    .reverseMask {
+                        Rectangle().frame(width: box.width, height: box.height).position(center)
+                    }
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(Color.white, lineWidth: 2)
+                    .shadow(color: .black.opacity(0.4), radius: 2)
+                    .frame(width: box.width, height: box.height)
+                    .position(center)
+            }
+            .frame(width: size.width, height: size.height)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        doc.beginInteraction()
+                        let x = clamped(value.location.x / max(size.width, 1), view.width)
+                        let y = clamped(value.location.y / max(size.height, 1), view.height)
+                        doc.setZoomFocus(zoom.id, CGPoint(x: x, y: y))
+                    }
+                    .onEnded { _ in doc.endInteraction() }
+            )
+        }
+        .aspectRatio(aspect, contentMode: .fit)
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.1)))
+        .task(id: zoom.start) { frame = await doc.zoomFrame(zoom) }
+        .accessibilityElement()
+        .accessibilityLabel("Zoom spot")
+    }
+
+    /// Keeps the view inside the recording.
+    private func clamped(_ v: CGFloat, _ extent: CGFloat) -> CGFloat {
+        let half = extent / 2
+        return half >= 0.5 ? 0.5 : min(max(v, half), 1 - half)
+    }
+}
+
+private extension View {
+    /// Cuts `mask` out of the view.
+    func reverseMask<Mask: View>(@ViewBuilder _ mask: () -> Mask) -> some View {
+        self.mask {
+            Rectangle().overlay(alignment: .topLeading) { mask().blendMode(.destinationOut) }.compositingGroup()
         }
     }
 }

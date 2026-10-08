@@ -791,6 +791,54 @@ final class RecordingDocument: ObservableObject {
         }
     }
 
+    /// Holds a zoom on `focus` (normalized in the recording), or lets it follow the pointer again with nil.
+    /// A zoom given a spot counts as hand-made, so redoing auto zoom keeps it.
+    func setZoomFocus(_ id: UUID, _ focus: CGPoint?) {
+        guard let index = edits.zooms.firstIndex(where: { $0.id == id }) else { return }
+        update { edits in
+            edits.zooms[index].focus = focus
+            if focus != nil { edits.zooms[index].isAuto = false }
+        }
+    }
+
+    /// Where a zoom looks when it's switched to a chosen spot: at the pointer, once it has zoomed in.
+    func initialZoomFocus(_ zoom: ZoomSegment) -> CGPoint {
+        let point = motion.cursor(at: Self.zoomedIn(zoom)).point
+        return CGPoint(x: min(max(point.x, 0), 1), y: min(max(point.y, 0), 1))
+    }
+
+    /// The part of the recording a zoom at `scale` shows, as a fraction of its width and height.
+    func zoomViewSize(scale: Double) -> CGSize {
+        let geometry = cameraGeometry(recordingFrame)
+        let s = max(scale, 1)
+        return CGSize(
+            width: min(geometry.viewHalf.width * 2 / s / geometry.scale.width, 1),
+            height: min(geometry.viewHalf.height * 2 / s / geometry.scale.height, 1)
+        )
+    }
+
+    /// A frame of the recording to pick a zoom's spot on, from once the zoom has zoomed in.
+    func zoomFrame(_ zoom: ZoomSegment) async -> CGImage? {
+        let generator = AVAssetImageGenerator(asset: sourceAsset)
+        generator.maximumSize = CGSize(width: 640, height: 640)
+        generator.requestedTimeToleranceBefore = CMTime(value: 1, timescale: 10)
+        generator.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 10)
+        return try? await generator.image(at: CMTime(seconds: Self.zoomedIn(zoom), preferredTimescale: 600)).image
+    }
+
+    /// Moves the playhead into a zoom, unless it's there already, so the preview shows what's being changed.
+    func showZoom(_ zoom: ZoomSegment) {
+        let now = timeline.sourceTime(atOutput: currentTime)
+        guard now < Self.zoomedIn(zoom) || now > zoom.end else { return }
+        player.pause()
+        seek(to: timeline.outputTime(atSource: Self.zoomedIn(zoom)))
+    }
+
+    /// The moment a zoom has fully zoomed in, or its middle when it's shorter than that.
+    private static func zoomedIn(_ zoom: ZoomSegment) -> Double {
+        min(zoom.start + MotionTrack.zoomInDuration, (zoom.start + zoom.end) / 2)
+    }
+
     func setAutoZoom(_ enabled: Bool) {
         update { edits in
             edits.style.autoZoom = enabled

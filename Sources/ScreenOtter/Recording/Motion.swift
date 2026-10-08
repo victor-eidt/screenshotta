@@ -104,7 +104,12 @@ nonisolated struct MotionTrack: Sendable {
         clicks = recording.clicks.map { CursorRecording.Sample(t: $0.t, x: $0.x / w, y: $0.y / h) }
         cursor = style.smoothCursor ? Self.smooth(raw, sigma: 0.09) : raw
         opacity = Self.visibility(raw: raw, hasSamples: !samples.isEmpty, hideIdle: style.hideIdleCursor)
-        camera = Self.camera(pointer: raw.map(geometry.framed), zooms: zooms.sorted { $0.start < $1.start }, geometry: geometry)
+        var clickAt = [CGPoint?](repeating: nil, count: count)
+        for click in clicks {
+            let i = Int((click.t * Self.rate).rounded())
+            if i >= 0, i < count { clickAt[i] = geometry.framed(CGPoint(x: click.x, y: click.y)) }
+        }
+        camera = Self.camera(pointer: raw.map(geometry.framed), clicks: clickAt, zooms: zooms.sorted { $0.start < $1.start }, geometry: geometry)
     }
 
     // MARK: - Lookup
@@ -198,9 +203,11 @@ nonisolated struct MotionTrack: Sendable {
     ///
     /// While zoomed, the camera holds still as long as the pointer stays near the middle, follows it in the
     /// direction it moves once it heads away, and is smoothed looking both ways, so it moves with the pointer
-    /// rather than after it. Zooming in and out travels in one straight line: the view scales around the one
-    /// point that stays put on screen, so it never needs nudging back inside the edges halfway.
-    private static func camera(pointer: [CGPoint], zooms: [ZoomSegment], geometry: CameraGeometry) -> [CameraState] {
+    /// rather than after it. Every click while zoomed in re-centers on the click, and the camera sets off
+    /// toward it ahead of time, so zooming into one spot and then clicking another pans over to it. A zoom
+    /// with a `focus` stays on that spot instead. Zooming in and out travels in one straight line: the view
+    /// scales around the one point that stays put on screen, so it never needs nudging back inside the edges halfway.
+    private static func camera(pointer: [CGPoint], clicks: [CGPoint?], zooms: [ZoomSegment], geometry: CameraGeometry) -> [CameraState] {
         let count = pointer.count
         let frames = { (t: Double) in min(max(Int((t * rate).rounded()), 0), count) }
 
@@ -237,6 +244,13 @@ nonisolated struct MotionTrack: Sendable {
             group = last + 1
         }
 
+        // Zooms with a chosen spot look there for as long as they last, easing out included.
+        var fixed = [CGPoint?](repeating: nil, count: count)
+        for zoom in zooms {
+            guard let focus = zoom.focus else { continue }
+            for i in frames(zoom.start)..<frames(zoom.end + zoomOutDuration) { fixed[i] = geometry.framed(focus) }
+        }
+
         // Zooms that start from the full view land centered on the pointer; until then the camera aims there.
         var arrivals: [(first: Int, arrival: Int)] = []
         for zoom in zooms {
@@ -246,16 +260,23 @@ nonisolated struct MotionTrack: Sendable {
         }
         let landings = Set(arrivals.map(\.arrival))
 
-        // Where to look: the pointer, with a round dead zone around the current focus.
+        // Where to look: the pointer, with a round dead zone around the current focus. Clicks while zoomed
+        // in re-center on the click.
         let aspect = Double(geometry.aspect)
         var targets: [CGPoint] = []
         targets.reserveCapacity(count)
+        var aims: [Int] = []
         var anchor = pointer.first ?? CGPoint(x: 0.5, y: 0.5)
         for (i, p) in pointer.enumerated() {
-            if landings.contains(i) {
+            if let spot = fixed[i] {
+                anchor = spot
+            } else if landings.contains(i) {
                 anchor = p
+            } else if let click = clicks[i], logScale[i] > 0.05 {
+                anchor = click
+                aims.append(i)
             } else {
-                let radius = 0.17 / heldScale[i]
+                let radius = 0.1 / heldScale[i]
                 let dx = p.x - anchor.x, dy = (p.y - anchor.y) * aspect
                 let distance = hypot(dx, dy)
                 if distance > radius {
@@ -269,6 +290,13 @@ nonisolated struct MotionTrack: Sendable {
         for (first, arrival) in arrivals {
             for i in first..<arrival { targets[i] = targets[arrival] }
         }
+        // Head for each click a little ahead, so the camera is there when it lands rather than after.
+        let lead = Int(0.45 * rate)
+        var previous = 0
+        for aim in aims {
+            for i in max(previous, aim - lead)..<aim where fixed[i] == nil { targets[i] = targets[aim] }
+            previous = aim + 1
+        }
 
         // Kept inside the recording at full zoom before smoothing, so reaching an edge or a corner
         // rounds off into the same motion instead of stopping one direction first.
@@ -281,7 +309,7 @@ nonisolated struct MotionTrack: Sendable {
                 y: inside(targets[i].y, half: geometry.viewHalf.height / heldScale[i])
             )
         }
-        let focus = smooth(held, sigma: 0.32)
+        let focus = smooth(held, sigma: 0.26)
 
         return (0..<count).map { i in
             let scale = exp(logScale[i])

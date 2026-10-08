@@ -49,7 +49,7 @@ nonisolated struct ClipSegment: Codable, Identifiable, Equatable, Sendable {
     var outputDuration: Double { (end - start) / speed }
 }
 
-/// A stretch of the recording where the camera zooms in and follows the pointer. Source seconds.
+/// A stretch of the recording where the camera zooms in and follows the pointer, or holds on a chosen spot. Source seconds.
 nonisolated struct ZoomSegment: Codable, Identifiable, Equatable, Sendable {
     var id = UUID()
     var start: Double
@@ -57,6 +57,9 @@ nonisolated struct ZoomSegment: Codable, Identifiable, Equatable, Sendable {
     var scale: Double
     /// Made by auto zoom (from clicks) rather than by hand. Auto zooms are replaced when auto zoom is redone.
     var isAuto: Bool
+    /// A spot to hold on instead of following the pointer: the center of the view, normalized in the
+    /// recording (top-left origin).
+    var focus: CGPoint?
 }
 
 nonisolated enum RecordingBackground: Codable, Equatable, Hashable, Sendable {
